@@ -4,7 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Full agent capability benchmarks (current: refactor trio).
-# Runs with real LLM providers via API backend and a local fake CXDB.
+# Runs with real LLM providers (as specified by the DOT graph) and a local fake CXDB.
+#
+# IMPORTANT:
+# - The DOT file is the contract. This script MUST NOT silently change providers/models.
+# - If you want to override the graph's model_stylesheet, you must opt in via env vars.
 
 BENCH_DOTS=(
   "research/refactor-test-vague.dot"
@@ -22,6 +26,14 @@ echo "bench_out=$OUT_DIR"
 
 # Build Kilroy once.
 go build -o ./kilroy ./cmd/kilroy
+
+# Default pinned LiteLLM catalog shipped in-repo.
+PINNED_CATALOG_DEFAULT="$PWD/internal/attractor/modeldb/pinned/model_prices_and_context_window.json"
+PINNED_CATALOG="${KILROY_BENCH_LITELLM_CATALOG_PATH:-$PINNED_CATALOG_DEFAULT}"
+if [[ ! -f "$PINNED_CATALOG" ]]; then
+  echo "missing LiteLLM pinned catalog: $PINNED_CATALOG" >&2
+  exit 1
+fi
 
 # Start a fake CXDB server (Go) in the background.
 CXDB_BIN="$OUT_DIR/cxdb_fake"
@@ -160,19 +172,6 @@ fi
 
 echo "cxdb_url=$CXDB_URL"
 
-# Minimal pinned catalog.
-CATALOG="$OUT_DIR/model_prices_and_context_window.json"
-cat > "$CATALOG" <<'JSON'
-{
-  "gpt-5.2": {
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "max_input_tokens": 1000,
-    "max_output_tokens": 1000
-  }
-}
-JSON
-
 run_one() {
   local dot="$1"
   local name
@@ -181,35 +180,88 @@ run_one() {
   workdir="$OUT_DIR/$name"
   mkdir -p "$workdir"
 
-  # Transform the benchmark DOT to run on OpenAI (API backend) by swapping the model stylesheet.
-  # This avoids hard-depending on Anthropic/Gemini credentials being valid on first run.
+  # Snapshot the graph used for this run into the benchmark output directory.
   local graph
   graph="$workdir/graph.dot"
-  python3 - "$dot" "$graph" <<'PY'
-import re, sys, pathlib
-src_path = pathlib.Path(sys.argv[1])
-dst_path = pathlib.Path(sys.argv[2])
-src = src_path.read_text()
+  cp "$dot" "$workdir/graph.original.dot"
+  cp "$dot" "$graph"
 
-replacement = (
-    'model_stylesheet="\\n'
-    '            * { llm_model: gpt-5-codex; llm_provider: openai; reasoning_effort: medium; }\\n'
-    '            .hard { llm_model: gpt-5-codex; llm_provider: openai; reasoning_effort: high; }\\n'
-    '            .verify { llm_model: gpt-5-mini; llm_provider: openai; reasoning_effort: medium; }\\n'
-    '            .review { llm_model: gpt-5-codex; llm_provider: openai; reasoning_effort: high; }\\n'
-    '        "'
-)
+  # Optional, explicit override: replace the graph's model_stylesheet.
+  # - Preferred: provide a file with the stylesheet content (one rule per line).
+  # - Alternative: set KILROY_BENCH_OVERRIDE_PROVIDER=openai to use an OpenAI preset.
+  if [[ -n "${KILROY_BENCH_MODEL_STYLESHEET_FILE:-}" ]]; then
+    if [[ ! -f "${KILROY_BENCH_MODEL_STYLESHEET_FILE}" ]]; then
+      echo "KILROY_BENCH_MODEL_STYLESHEET_FILE does not exist: ${KILROY_BENCH_MODEL_STYLESHEET_FILE}" >&2
+      exit 1
+    fi
+    echo "WARNING: overriding model_stylesheet from file: ${KILROY_BENCH_MODEL_STYLESHEET_FILE}"
+    python3 - "$graph" "${KILROY_BENCH_MODEL_STYLESHEET_FILE}" <<'PY'
+import pathlib, re, sys
+graph_path = pathlib.Path(sys.argv[1])
+stylesheet_path = pathlib.Path(sys.argv[2])
+src = graph_path.read_text()
+stylesheet = stylesheet_path.read_text()
 
-out, n = re.subn(r'model_stylesheet\s*=\s*\".*?\"', replacement, src, count=1, flags=re.S)
+lines = [ln.strip() for ln in stylesheet.splitlines() if ln.strip()]
+indented = "\n".join("            " + ln for ln in lines)
+replacement = 'model_stylesheet="\\n' + indented + '\\n        "'
+
+out, n = re.subn(r'model_stylesheet\\s*=\\s*\".*?\"', replacement, src, count=1, flags=re.S)
 if n != 1:
     raise SystemExit(f"expected to replace exactly 1 model_stylesheet, replaced {n}")
-dst_path.write_text(out)
+graph_path.write_text(out)
 PY
+  elif [[ -n "${KILROY_BENCH_OVERRIDE_PROVIDER:-}" ]]; then
+    if [[ "${KILROY_BENCH_OVERRIDE_PROVIDER}" != "openai" ]]; then
+      echo "KILROY_BENCH_OVERRIDE_PROVIDER is set to an unsupported value: ${KILROY_BENCH_OVERRIDE_PROVIDER} (supported: openai)" >&2
+      exit 1
+    fi
+    base_model="${KILROY_BENCH_OVERRIDE_MODEL_BASE:-gpt-5.2}"
+    hard_model="${KILROY_BENCH_OVERRIDE_MODEL_HARD:-gpt-5.2-pro}"
+    verify_model="${KILROY_BENCH_OVERRIDE_MODEL_VERIFY:-gpt-5.2-mini}"
+    review_model="${KILROY_BENCH_OVERRIDE_MODEL_REVIEW:-$hard_model}"
+    echo "WARNING: overriding model_stylesheet preset: provider=openai base=$base_model hard=$hard_model verify=$verify_model review=$review_model"
+    python3 - "$graph" "$base_model" "$hard_model" "$verify_model" "$review_model" <<'PY'
+import pathlib, re, sys
+graph_path = pathlib.Path(sys.argv[1])
+base_model, hard_model, verify_model, review_model = sys.argv[2:6]
+src = graph_path.read_text()
+
+stylesheet = f\"\"\"\n* {{ llm_model: {base_model}; llm_provider: openai; reasoning_effort: medium; }}\n.hard {{ llm_model: {hard_model}; llm_provider: openai; reasoning_effort: high; }}\n.verify {{ llm_model: {verify_model}; llm_provider: openai; reasoning_effort: medium; }}\n.review {{ llm_model: {review_model}; llm_provider: openai; reasoning_effort: high; }}\n\"\"\".strip()
+
+lines = [ln.strip() for ln in stylesheet.splitlines() if ln.strip()]
+indented = \"\\n\".join(\"            \" + ln for ln in lines)
+replacement = 'model_stylesheet=\"\\\\n' + indented + '\\\\n        \"'
+
+out, n = re.subn(r'model_stylesheet\\s*=\\s*\".*?\"', replacement, src, count=1, flags=re.S)
+if n != 1:
+    raise SystemExit(f\"expected to replace exactly 1 model_stylesheet, replaced {n}\")
+graph_path.write_text(out)
+PY
+  else
+    echo "NOTE: using graph model_stylesheet as-is (no overrides)."
+  fi
 
   # Fresh git repo to operate on.
   local repo="$workdir/repo"
   mkdir -p "$repo"
   (cd "$repo" && git init -q && git config user.name tester && git config user.email tester@example.com && echo "hello" > README.md && git add -A && git commit -qm init)
+
+  local providers
+  providers="$(python3 - "$graph" <<'PY'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+txt = path.read_text()
+providers = set()
+for m in re.finditer(r'llm_provider\\s*:\\s*([a-zA-Z0-9_-]+)\\s*;', txt):
+    p = m.group(1).strip().lower()
+    if p == "gemini":
+        p = "google"
+    providers.add(p)
+for p in sorted(providers):
+    print(p)
+PY
+)"
 
   local cfg="$workdir/run.yaml"
   cat > "$cfg" <<YAML
@@ -220,15 +272,29 @@ cxdb:
   binary_addr: 127.0.0.1:9009
   http_base_url: $CXDB_URL
 modeldb:
-  litellm_catalog_path: $CATALOG
-  litellm_catalog_update_policy: pinned
+  litellm_catalog_path: $PINNED_CATALOG
+  litellm_catalog_update_policy: ${KILROY_BENCH_LITELLM_UPDATE_POLICY:-pinned}
 git:
   run_branch_prefix: attractor/run
+  commit_per_node: true
 llm:
   providers:
-    openai:
-      backend: api
 YAML
+  local backend_default="${KILROY_BENCH_BACKEND_DEFAULT:-api}"
+  while read -r p; do
+    [[ -z "$p" ]] && continue
+    local backend="$backend_default"
+    case "$p" in
+      openai) backend="${KILROY_BENCH_BACKEND_OPENAI:-$backend}" ;;
+      anthropic) backend="${KILROY_BENCH_BACKEND_ANTHROPIC:-$backend}" ;;
+      google) backend="${KILROY_BENCH_BACKEND_GOOGLE:-$backend}" ;;
+      *) echo "unsupported provider in graph: $p" >&2; exit 1 ;;
+    esac
+    cat >> "$cfg" <<YAML
+    $p:
+      backend: $backend
+YAML
+  done <<< "$providers"
 
   local run_id="bench-$name-$STAMP"
   local logs_root="$workdir/logs"
@@ -239,10 +305,16 @@ YAML
   echo "run_id=$run_id"
   echo "logs_root=$logs_root"
 
-  # Long runs: leave overall timeout to caller; per-node timeout is handled by the engine.
+  # Guard against hangs: per-node timeout is enforced by the engine, and we also apply an overall per-run timeout.
+  local run_timeout="${KILROY_BENCH_RUN_TIMEOUT:-2h}"
   set +e
-  ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" | tee "$workdir/run.out"
-  local ec=${PIPESTATUS[0]}
+  if [[ "$run_timeout" == "0" ]]; then
+    ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" | tee "$workdir/run.out"
+    local ec=${PIPESTATUS[0]}
+  else
+    timeout --preserve-status --signal=SIGTERM "$run_timeout" ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" | tee "$workdir/run.out"
+    local ec=${PIPESTATUS[0]}
+  fi
   set -e
 
   echo "exit_code=$ec" | tee "$workdir/exit_code.txt"
