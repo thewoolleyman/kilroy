@@ -46,6 +46,137 @@ func (a *scriptedStreamAdapter) Requests() []Request {
 	return append([]Request{}, a.requests...)
 }
 
+func TestStreamGenerate_RejectsPromptAndMessagesTogether(t *testing.T) {
+	c := NewClient()
+	c.Register(&scriptedStreamAdapter{name: "openai"})
+	prompt := "hi"
+	_, err := StreamGenerate(context.Background(), GenerateOptions{
+		Client:   c,
+		Model:    "m",
+		Prompt:   &prompt,
+		Messages: []Message{User("u")},
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	var ce *ConfigurationError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected ConfigurationError, got %T (%v)", err, err)
+	}
+}
+
+func TestStreamGenerate_TimeoutPerStep_EmitsRequestTimeoutError(t *testing.T) {
+	c := NewClient()
+	a := &scriptedStreamAdapter{
+		name: "openai",
+		scripts: []func(ctx context.Context, req Request) (Stream, error){
+			func(ctx context.Context, req Request) (Stream, error) {
+				_ = req
+				sctx, cancel := context.WithCancel(ctx)
+				st := NewChanStream(cancel)
+				go func() {
+					defer st.CloseSend()
+					<-ctx.Done()
+					cancel()
+				}()
+				_ = sctx
+				return st, nil
+			},
+		},
+	}
+	c.Register(a)
+
+	prompt := "hi"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	res, err := StreamGenerate(ctx, GenerateOptions{
+		Client:         c,
+		Model:          "m",
+		Provider:       "openai",
+		Prompt:         &prompt,
+		TimeoutPerStep: 25 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StreamGenerate: %v", err)
+	}
+	defer res.Close()
+
+	var sawErr error
+	for ev := range res.Events() {
+		if ev.Type == StreamEventError && ev.Err != nil {
+			sawErr = ev.Err
+		}
+	}
+	if sawErr == nil {
+		t.Fatalf("expected error event")
+	}
+	var rte *RequestTimeoutError
+	if !errors.As(sawErr, &rte) {
+		t.Fatalf("expected RequestTimeoutError, got %T (%v)", sawErr, sawErr)
+	}
+	_, rerr := res.Response()
+	if !errors.As(rerr, &rte) {
+		t.Fatalf("Response error: expected RequestTimeoutError, got %T (%v)", rerr, rerr)
+	}
+}
+
+func TestStreamGenerate_TimeoutTotal_EmitsRequestTimeoutError(t *testing.T) {
+	c := NewClient()
+	a := &scriptedStreamAdapter{
+		name: "openai",
+		scripts: []func(ctx context.Context, req Request) (Stream, error){
+			func(ctx context.Context, req Request) (Stream, error) {
+				_ = req
+				sctx, cancel := context.WithCancel(ctx)
+				st := NewChanStream(cancel)
+				go func() {
+					defer st.CloseSend()
+					<-ctx.Done()
+					cancel()
+				}()
+				_ = sctx
+				return st, nil
+			},
+		},
+	}
+	c.Register(a)
+
+	prompt := "hi"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	res, err := StreamGenerate(ctx, GenerateOptions{
+		Client:       c,
+		Model:        "m",
+		Provider:     "openai",
+		Prompt:       &prompt,
+		TimeoutTotal: 25 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StreamGenerate: %v", err)
+	}
+	defer res.Close()
+
+	var sawErr error
+	for ev := range res.Events() {
+		if ev.Type == StreamEventError && ev.Err != nil {
+			sawErr = ev.Err
+		}
+	}
+	if sawErr == nil {
+		t.Fatalf("expected error event")
+	}
+	var rte *RequestTimeoutError
+	if !errors.As(sawErr, &rte) {
+		t.Fatalf("expected RequestTimeoutError, got %T (%v)", sawErr, sawErr)
+	}
+	_, rerr := res.Response()
+	if !errors.As(rerr, &rte) {
+		t.Fatalf("Response error: expected RequestTimeoutError, got %T (%v)", rerr, rerr)
+	}
+}
+
 func TestStreamGenerate_SimpleStreaming_YieldsDeltasAndFinish(t *testing.T) {
 	c := NewClient()
 	a := &scriptedStreamAdapter{

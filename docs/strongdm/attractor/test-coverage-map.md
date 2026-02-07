@@ -241,7 +241,7 @@ Line numbers are from the current in-repo markdown specs; they will drift if the
 |---:|---|---|---|
 | 1152 | OpenAI profile toolset includes `apply_patch` | Covered (unit) | `internal/agent/profile_test.go`, `internal/agent/apply_patch_test.go` |
 | 1153 | Anthropic profile toolset includes `edit_file` | Covered (unit) | `internal/agent/profile_test.go` |
-| 1154 | Gemini profile provides gemini-cli-aligned tools | Partial | `internal/agent/profile_test.go` (tool presence); not a byte-for-byte gemini-cli mirror test |
+| 1154 | Gemini profile provides gemini-cli-aligned tools | Covered (unit) | `internal/agent/profile_test.go` (exact tool list asserted vs spec Section 3.6) |
 | 1155 | Provider-specific system prompts exist | Covered (unit) | `internal/agent/profile_test.go` |
 | 1156 | Custom tools can be registered on top of any profile | Covered (unit) | `internal/agent/session_dod_test.go` |
 | 1157 | Tool name collisions: custom overrides defaults | Covered (unit) | `internal/agent/session_dod_test.go` |
@@ -373,6 +373,66 @@ Line numbers are from the current in-repo markdown specs; they will drift if the
 | 1993 | Beta headers supported (Anthropic) | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` |
 | 1994 | HTTP errors map to error hierarchy | Covered (unit) | `internal/llm/errors_test.go`, `internal/llm/providers/*/adapter_test.go` |
 | 1995 | Retry-After parsed and set on error | Covered (unit) | `internal/llm/errors_test.go`, `internal/llm/providers/openai/adapter_test.go`, `internal/llm/providers/google/adapter_test.go` |
+
+#### 8.3 Message & Content Model (lines 1999-2005)
+
+| Line | DoD item | Coverage | Test(s) |
+|---:|---|---|---|
+| 1999 | Text-only messages work across all providers | Covered (unit) | `internal/llm/providers/openai/adapter_test.go`, `internal/llm/providers/anthropic/adapter_test.go`, `internal/llm/providers/google/adapter_test.go` |
+| 2000 | Image input works (URL, base64, local path) | Covered (unit) | `internal/llm/providers/openai/adapter_test.go`, `internal/llm/providers/anthropic/adapter_test.go`, `internal/llm/providers/google/adapter_test.go` (`TestAdapter_Complete_ImageInput_URL_Data_AndFilePath`) |
+| 2001 | Audio/document parts handled or rejected | Covered (unit) | `internal/llm/providers/openai/adapter_test.go`, `internal/llm/providers/anthropic/adapter_test.go`, `internal/llm/providers/google/adapter_test.go` (`TestAdapter_Complete_RejectsAudioAndDocumentParts`) |
+| 2002 | Tool call parts round-trip correctly | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_ToolLoop_ExecutesToolsAndContinues`) |
+| 2003 | Thinking blocks preserved and round-tripped with signatures | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` (`TestAdapter_ThinkingBlocks_RoundTripIncludingRedacted`) |
+| 2004 | Redacted thinking passed through verbatim | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` (`TestAdapter_ThinkingBlocks_RoundTripIncludingRedacted`) |
+| 2005 | Multimodal messages (text + images) work | Covered (unit) | `internal/llm/providers/*/adapter_test.go` (`TestAdapter_Complete_ImageInput_URL_Data_AndFilePath`) |
+
+#### 8.4 Generation (lines 2009-2019)
+
+| Line | DoD item | Coverage | Test(s) |
+|---:|---|---|---|
+| 2009 | `generate()` works with simple text `prompt` | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_SimplePrompt`) |
+| 2010 | `generate()` works with full `messages` list | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_MessagesList`) |
+| 2011 | `generate()` rejects when both `prompt` and `messages` provided | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_RejectsPromptAndMessagesTogether`) |
+| 2012 | Streaming yields `TEXT_DELTA` that concatenates to full response | Covered (unit) | `internal/llm/stream_generate_test.go` (`TestStreamGenerate_SimpleStreaming_YieldsDeltasAndFinish`) |
+| 2013 | Streaming yields `STREAM_START` and `FINISH` events | Covered (unit) | `internal/llm/stream_generate_test.go`, `internal/llm/providers/*/adapter_test.go` |
+| 2014 | Streaming follows start/delta/end pattern for text segments | Covered (unit) | `internal/llm/stream_generate_test.go`, `internal/llm/providers/*/adapter_test.go` |
+| 2015 | `generate_object()` returns parsed, validated structured output | Covered (unit) | `internal/llm/generate_object_test.go` |
+| 2016 | `generate_object()` raises `NoObjectGeneratedError` on parse/validation failure | Covered (unit) | `internal/llm/generate_object_test.go` |
+| 2017 | Cancellation works for `generate()` and streaming | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_Cancellation_ReturnsAbortError`), `internal/llm/stream_generate_test.go` (`TestStreamGenerate_Cancellation_EmitsAbortError`) |
+| 2018 | Timeouts work (total + per-step) | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_Timeout*`), `internal/llm/stream_generate_test.go` (`TestStreamGenerate_Timeout*`) |
+
+#### 8.5 Reasoning Tokens (lines 2022-2028)
+
+| Line | DoD item | Coverage | Test(s) |
+|---:|---|---|---|
+| 2022 | OpenAI reasoning models return `reasoning_tokens` via Responses API | Covered (unit) | `internal/llm/providers/openai/adapter_test.go` (`TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens`) |
+| 2023 | `reasoning_effort` passed through correctly | Covered (unit) | `internal/llm/providers/openai/adapter_test.go` |
+| 2024-2025 | Anthropic thinking blocks returned/preserved with signatures | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` (`TestAdapter_ThinkingBlocks_RoundTripIncludingRedacted`) |
+| 2026 | Gemini `thoughtsTokenCount` mapped to `reasoning_tokens` | Covered (unit) | `internal/llm/providers/google/adapter_test.go` (`TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens`) |
+| 2027 | `Usage` reports `reasoning_tokens` separate from `output_tokens` | Covered (unit) | `internal/llm/providers/openai/adapter_test.go`, `internal/llm/providers/google/adapter_test.go` |
+
+#### 8.6 Prompt Caching (lines 2031-2039)
+
+| Line | DoD item | Coverage | Test(s) |
+|---:|---|---|---|
+| 2032 | OpenAI `cache_read_tokens` populated from Responses usage details | Covered (unit) | `internal/llm/providers/openai/adapter_test.go` (`TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens`) |
+| 2033-2036 | Anthropic auto-cache injects cache_control + beta header; disable via provider_options | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` (`TestAdapter_PromptCaching_AutoCacheDefaultAndDisable`) |
+| 2035 | Anthropic `cache_read_tokens` and `cache_write_tokens` populated | Covered (unit) | `internal/llm/providers/anthropic/adapter_test.go` |
+| 2038 | Gemini `cache_read_tokens` populated from `cachedContentTokenCount` | Covered (unit) | `internal/llm/providers/google/adapter_test.go` (`TestAdapter_Complete_Usage_MapsReasoningAndCacheTokens`) |
+| 2039 | Multi-turn session shows significant cache_read_tokens (>50%) | Manual | Requires real providers; see remaining items note below |
+
+#### 8.7 Tool Calling (lines 2043-2054)
+
+| Line | DoD item | Coverage | Test(s) |
+|---:|---|---|---|
+| 2043 | Active tools trigger automatic tool execution loops | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_ToolLoop_ExecutesToolsAndContinues`) |
+| 2044 | Passive tools return tool calls without looping | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_PassiveToolCall_ReturnsToolCallsWithoutLooping`), `internal/llm/stream_generate_test.go` (passive tool streaming coverage) |
+| 2045-2046 | `max_tool_rounds` respected; 0 disables auto execution | Covered (unit) | `internal/llm/generate_test.go`, `internal/llm/stream_generate_test.go` |
+| 2047-2048 | Parallel tool calls executed concurrently and results sent in one continuation | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_ParallelToolCalls_ExecuteConcurrently`) |
+| 2049-2050 | Tool errors and unknown tools sent as error results (not exceptions) | Covered (unit) | `internal/llm/generate_test.go` (`TestGenerate_UnknownToolCall_SendsErrorResultToModel`, `TestGenerate_ToolArgsSchemaValidationError_*`) |
+| 2051 | ToolChoice modes translated per provider | Covered (unit) | `internal/llm/providers/*/adapter_test.go` (`TestAdapter_Complete_ToolChoice_MappedPerSpec`) |
+| 2052 | Tool call argument JSON parsed + validated before exec | Covered (unit) | `internal/llm/tool_validation_test.go`, `internal/llm/generate_test.go` |
+| 2053 | `StepResult` tracks step tool calls/results/usage | Covered (unit) | `internal/llm/generate_test.go` |
 
 #### 8.8 Error Handling & Retry (lines 2057-2066)
 

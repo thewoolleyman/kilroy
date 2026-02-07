@@ -92,6 +92,40 @@ func TestGenerate_SimplePrompt(t *testing.T) {
 	}
 }
 
+func TestGenerate_MessagesList(t *testing.T) {
+	c := NewClient()
+	a := &scriptedAdapter{
+		name: "openai",
+		steps: []func(req Request) (Response, error){
+			func(req Request) (Response, error) {
+				if got, want := len(req.Messages), 2; got != want {
+					return Response{}, fmt.Errorf("messages: got %d want %d (%+v)", got, want, req.Messages)
+				}
+				if req.Messages[0].Role != RoleUser || strings.TrimSpace(req.Messages[0].Text()) != "hi" {
+					return Response{}, fmt.Errorf("msg0: %+v", req.Messages[0])
+				}
+				if req.Messages[1].Role != RoleAssistant || strings.TrimSpace(req.Messages[1].Text()) != "hello" {
+					return Response{}, fmt.Errorf("msg1: %+v", req.Messages[1])
+				}
+				return Response{Message: Assistant("ok")}, nil
+			},
+		},
+	}
+	c.Register(a)
+
+	res, err := Generate(context.Background(), GenerateOptions{
+		Client:   c,
+		Model:    "m",
+		Messages: []Message{User("hi"), Assistant("hello")},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.TrimSpace(res.Text) != "ok" {
+		t.Fatalf("text: %q", res.Text)
+	}
+}
+
 func TestGenerate_RejectsPromptAndMessagesTogether(t *testing.T) {
 	c := NewClient()
 	c.Register(&scriptedAdapter{name: "openai"})
@@ -182,6 +216,46 @@ func TestGenerate_ToolLoop_ExecutesToolsAndContinues(t *testing.T) {
 	}
 	if res.Steps[0].ToolResults[0].IsError {
 		t.Fatalf("unexpected tool error: %+v", res.Steps[0].ToolResults[0])
+	}
+}
+
+func TestGenerate_PassiveToolCall_ReturnsToolCallsWithoutLooping(t *testing.T) {
+	c := NewClient()
+	a := &scriptedAdapter{
+		name: "openai",
+		steps: []func(req Request) (Response, error){
+			func(req Request) (Response, error) {
+				call := ToolCallData{ID: "call1", Name: "t1", Arguments: json.RawMessage(`{}`), Type: "function"}
+				return Response{Message: Message{Role: RoleAssistant, Content: []ContentPart{{Kind: ContentToolCall, ToolCall: &call}}}}, nil
+			},
+		},
+	}
+	c.Register(a)
+
+	prompt := "do"
+	res, err := Generate(context.Background(), GenerateOptions{
+		Client: c,
+		Model:  "m",
+		Prompt: &prompt,
+		Tools: []Tool{
+			// Defined but no execute handler => passive tool.
+			{Definition: ToolDefinition{Name: "t1", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got, want := len(a.reqs), 1; got != want {
+		t.Fatalf("adapter calls: got %d want %d", got, want)
+	}
+	if got, want := len(res.Steps), 1; got != want {
+		t.Fatalf("steps: got %d want %d", got, want)
+	}
+	if got, want := len(res.ToolCalls), 1; got != want {
+		t.Fatalf("tool_calls: got %d want %d", got, want)
+	}
+	if got := len(res.ToolResults); got != 0 {
+		t.Fatalf("unexpected tool_results: %+v", res.ToolResults)
 	}
 }
 
