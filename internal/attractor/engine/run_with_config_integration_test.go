@@ -115,12 +115,14 @@ digraph G {
 	if err := json.Unmarshal(b, &inv); err != nil {
 		t.Fatalf("unmarshal cli_invocation.json: %v", err)
 	}
-	if inv["env_mode"] != "inherit" {
-		t.Fatalf("env_mode: %v", inv["env_mode"])
+	if inv["env_mode"] != "isolated" {
+		t.Fatalf("env_mode: got %v want isolated", inv["env_mode"])
 	}
-	al, ok := inv["env_allowlist"].([]any)
-	if !ok || len(al) != 1 || strings.TrimSpace(anyToString(al[0])) != "*" {
-		t.Fatalf("env_allowlist: %#v", inv["env_allowlist"])
+	if strings.TrimSpace(anyToString(inv["env_scope"])) != "codex" {
+		t.Fatalf("env_scope: %#v", inv["env_scope"])
+	}
+	if _, ok := inv["state_root"]; !ok {
+		t.Fatalf("state_root missing: %#v", inv)
 	}
 	if strings.TrimSpace(anyToString(inv["working_dir"])) == "" {
 		t.Fatalf("working_dir missing in invocation: %#v", inv["working_dir"])
