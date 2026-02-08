@@ -4,7 +4,7 @@
 
 **Goal:** Eliminate the confirmed Kilroy/Attractor reliability failures from the latest DTTF runs (resume/parallel branch naming, relative state-path handling, retry/restart over-looping, and missing terminal artifacts), with deterministic tests and end-to-end validation.
 
-**Architecture:** Introduce a single failure-policy layer used by stage retries, loop-restart decisions, fan-in aggregation, and CLI failure handling; centralize terminal artifact writes so all fatal exits produce `final.json`; and make resume/parallel invariants explicit by persisting/restoring branch-prefix state. Keep behavior fail-closed on unknown failure classes and ensure deterministic failures do not trigger unbounded retries/restarts.
+**Architecture:** Introduce a single failure-policy layer used by stage retries, loop-restart decisions, fan-in aggregation, and CLI failure handling; centralize terminal finalization so all fatal exits produce `final.json` and terminal CXDB failure events; and make resume/parallel invariants explicit by persisting/restoring branch-prefix state. Keep behavior fail-closed on unknown failure classes and ensure deterministic failures do not trigger unbounded retries/restarts.
 
 **Tech Stack:** Go (`internal/attractor/engine`, `internal/attractor/runtime`), Git worktrees/refs, CLI adapters (`codex`, `claude`, `gemini`), CXDB artifact pipeline, Go test.
 
@@ -39,13 +39,14 @@ This plan addresses Kilroy/Attractor issues only (not DTTF implementation correc
 1. Retry and restart decisions must be class-aware (`transient_infra` vs `deterministic`) and fail-closed.
 2. Stage retry and loop restart must share the same classification/policy logic.
 3. Deterministic repeat loops must have a circuit breaker with explicit signature + threshold.
-4. Fatal exits must always persist `final.json` with failure reason.
+4. Fatal exits must always persist `final.json` with failure reason and emit terminal CXDB failure events.
 5. Resume must preserve run-branch invariants (`run_branch_prefix`) so parallel refs are always valid.
 6. CLI adapters must preserve actionable failure reasons and classify provider-contract failures deterministically.
 7. Path-sensitive env vars for subprocess CLIs must be absolute in invocation context.
 8. Fan-in all-fail outcomes must carry aggregated failure class/reason for downstream policy.
-9. Preflight should fail fast for known provider CLI contract mismatches.
-10. End-to-end verification must demonstrate no infinite loop and proper terminal artifact behavior.
+9. Preflight should fail fast for known provider CLI contract mismatches in both run and resume flows.
+10. Failure-policy metadata keys (`failure_class`, `failure_signature`) must be canonical and shared across retry/restart/fan-in/CLI code paths.
+11. End-to-end verification must demonstrate no infinite loop and proper terminal artifact behavior.
 
 ---
 
@@ -86,6 +87,7 @@ Expected: FAIL (policy behavior not implemented yet).
 Implement:
 - `type failureClass string`
 - constants: `failureClassTransientInfra`, `failureClassDeterministic`
+- metadata-key constants: `failureMetaClass = "failure_class"` and `failureMetaSignature = "failure_signature"`
 - `normalizedFailureClass(...)`
 - `classifyFailureClass(out runtime.Outcome) failureClass`
 - `restartFailureSignature(out runtime.Outcome) string`
@@ -237,6 +239,7 @@ Changes:
 - add `FailureReason string` to `runtime.FinalOutcome`.
 - introduce engine helper (single write path) for:
   - `final.json`
+  - terminal CXDB turn (`RunCompleted` / `RunFailed`)
   - optional CXDB artifact upload
   - run tarball generation
 - replace duplicated success/fail finalization code with helper calls.
@@ -356,28 +359,35 @@ normalizing relative state paths to absolute values."
 ## Task 7: Provider CLI Contract Hardening (`claude --verbose`) + Preflight
 
 **Files:**
+- Create: `internal/attractor/engine/provider_cli_preflight.go`
 - Modify: `internal/attractor/engine/codergen_router.go`
 - Modify: `internal/attractor/engine/run_with_config.go`
+- Modify: `internal/attractor/engine/resume.go`
 - Modify: `internal/attractor/engine/codergen_cli_invocation_test.go`
 - Create: `internal/attractor/engine/run_with_config_preflight_test.go`
+- Create: `internal/attractor/engine/resume_preflight_test.go`
 
 **Step 1: Write failing tests**
 
 Add tests:
-- Anthropic CLI args include `--verbose` when using `--output-format stream-json`.
+- Anthropic CLI args include `--verbose` only when capability probe indicates support for that flag.
 - RunWithConfig preflight fails fast when configured provider CLI lacks required flags/capabilities.
+- Resume preflight fails fast when resumed run config includes provider CLI contracts that are no longer satisfiable.
 
 **Step 2: Run tests to verify red**
 
-Run: `go test ./internal/attractor/engine -run 'TestDefaultCLIInvocation_Anthropic|TestRunWithConfig_Preflight' -v`
+Run: `go test ./internal/attractor/engine -run 'TestDefaultCLIInvocation_Anthropic|TestRunWithConfig_Preflight|TestResume_Preflight' -v`
 
 Expected: FAIL.
 
 **Step 3: Implement CLI contract hardening**
 
 Changes:
-- update Anthropic default invocation to include `--verbose`.
-- add provider CLI preflight in `RunWithConfig` after graph parse + catalog resolution and before CXDB startup:
+- update Anthropic default invocation to include `--verbose` only when capability-probe says supported; otherwise omit and emit a warning.
+- add shared provider CLI preflight helper and call it in:
+  - `RunWithConfig` after graph parse + catalog resolution and before CXDB startup
+  - `resumeFromLogsRoot` after run-config/model-catalog load and before backend creation
+- preflight checks:
   - verify executable exists.
   - probe capabilities minimally (flag presence or probe command behavior).
   - return deterministic error with actionable message.
@@ -386,14 +396,14 @@ Keep probes lightweight and deterministic; no network required.
 
 **Step 4: Run tests to verify green**
 
-Run: `go test ./internal/attractor/engine -run 'TestDefaultCLIInvocation_Anthropic|TestRunWithConfig_Preflight' -v`
+Run: `go test ./internal/attractor/engine -run 'TestDefaultCLIInvocation_Anthropic|TestRunWithConfig_Preflight|TestResume_Preflight' -v`
 
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add internal/attractor/engine/codergen_router.go internal/attractor/engine/run_with_config.go internal/attractor/engine/codergen_cli_invocation_test.go internal/attractor/engine/run_with_config_preflight_test.go
+git add internal/attractor/engine/provider_cli_preflight.go internal/attractor/engine/codergen_router.go internal/attractor/engine/run_with_config.go internal/attractor/engine/resume.go internal/attractor/engine/codergen_cli_invocation_test.go internal/attractor/engine/run_with_config_preflight_test.go internal/attractor/engine/resume_preflight_test.go
 git commit -m "feat(attractor): harden provider CLI contracts with anthropic verbose flag and run preflight
 
 Require known CLI capabilities up front and include --verbose for anthropic
@@ -412,7 +422,7 @@ stream-json output to avoid deterministic runtime contract failures."
 
 Add tests that run fake provider CLI failures and assert:
 - failure reason includes provider + stderr classification detail (not just `exit status 1`).
-- outcome metadata includes `failure_class` and stable signature fields for policy consumption.
+- outcome metadata includes canonical keys `failure_class` and `failure_signature` for policy consumption.
 
 **Step 2: Run tests to verify red**
 
@@ -424,7 +434,7 @@ Expected: FAIL.
 
 In `runCLI` error paths:
 - parse stderr/stdout for known contract/transient indicators.
-- populate `runtime.Outcome.Meta["failure_class"]`.
+- populate `runtime.Outcome.Meta` using shared constants (`failureMetaClass`, `failureMetaSignature`).
 - enrich `FailureReason` with concise provider-specific detail.
 
 Do not classify internal retry-able schema fallback failures as terminal until fallback exhausted.
@@ -458,7 +468,7 @@ so retry/restart policy can correctly differentiate deterministic vs transient e
 Add tests for all-fail fan-in:
 - aggregate class deterministic when any deterministic branch exists.
 - aggregate class transient only when all branches are transient.
-- returned outcome includes class + signature metadata.
+- returned outcome includes class + signature metadata using canonical keys.
 
 **Step 2: Run tests to verify red**
 
@@ -471,7 +481,7 @@ Expected: FAIL.
 In `FanInHandler.Execute` all-failed path:
 - inspect branch outcomes with `classifyFailureClass`.
 - build aggregate reason and stable signature.
-- return `StatusFail` with populated metadata for downstream loop-restart gate.
+- return `StatusFail` with populated metadata for downstream loop-restart gate using canonical keys.
 
 **Step 4: Run tests to verify green**
 
@@ -523,7 +533,10 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add internal/attractor/engine/reliability_guardrail_integration_test.go internal/attractor/engine/run_with_config_integration_test.go internal/attractor/engine/*.go
+git add internal/attractor/engine/reliability_guardrail_integration_test.go
+git add internal/attractor/engine/run_with_config_integration_test.go
+# Add only explicitly named implementation files touched by Task 10 fixes (no wildcards).
+git add internal/attractor/engine/engine.go internal/attractor/engine/parallel_handlers.go internal/attractor/engine/codergen_router.go internal/attractor/engine/run_with_config.go internal/attractor/engine/resume.go internal/attractor/engine/provider_cli_preflight.go
 git commit -m "test(attractor): add integration guardrails for retry/restart/finalization invariants
 
 Cover full-path reliability behavior: deterministic fail-fast, transient circuit
@@ -585,25 +598,28 @@ Run:
 
 Expected: PASS.
 
-**Step 3: Execute real DTTF run from clean logs root (detached)**
+**Step 3: Execute real DTTF resume validation from existing logs root (detached)**
 
 Use detached launch to avoid parent-session teardown:
 
 ```bash
+# Resume requires an existing logs root with manifest/checkpoint artifacts.
+SOURCE_LOGS_ROOT=/tmp/kilroy-dttf-real-cxdb-20260208T070102Z/logs
 RUN_ROOT=/tmp/kilroy-dttf-real-cxdb-$(date -u +%Y%m%dT%H%M%SZ)-postfix-guardrail
 mkdir -p "$RUN_ROOT"
-setsid -f bash -lc 'cd /home/user/code/kilroy-wt-state-isolation-watchdog && ./kilroy attractor resume --logs-root "$RUN_ROOT/logs" >> "$RUN_ROOT/resume.out" 2>&1'
+export SOURCE_LOGS_ROOT RUN_ROOT
+setsid -f bash -lc 'cd /home/user/code/kilroy-wt-state-isolation-watchdog && ./kilroy attractor resume --logs-root "$SOURCE_LOGS_ROOT" > "$RUN_ROOT/resume.out" 2>&1'
 ```
 
 Monitor:
 - `tail -f "$RUN_ROOT/resume.out"`
-- `rg -n 'loop_restart|failure_class|signature|final.json' "$RUN_ROOT"/logs -S`
+- `rg -n 'loop_restart|failure_class|failure_signature|final.json' "$SOURCE_LOGS_ROOT" -S`
 
 Acceptance criteria:
 - no `/parallel/...` invalid branch names.
 - no relative `CODEX_HOME` path errors.
 - deterministic failures do not spin for dozens of restarts.
-- terminal `logs/final.json` always exists on termination.
+- terminal `final.json` always exists on termination (`$SOURCE_LOGS_ROOT/final.json` or latest `restart-*/final.json` when restarts occur).
 
 **Step 4: Archive verification evidence**
 
@@ -636,4 +652,3 @@ If verification required code changes, create focused follow-up commits (no `git
 4. Resume preserves run-branch prefix and parallel refs remain valid.
 5. `final.json` exists and includes `failure_reason` for all fatal exits.
 6. DTTF real run demonstrates guardrails and terminal artifact guarantees.
-
