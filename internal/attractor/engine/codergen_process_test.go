@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -104,6 +105,90 @@ digraph G {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("watchdog child process pid=%d still exists", pid)
+}
+
+func TestWaitWithIdleWatchdog_ContextCancelKillsProcessGroup(t *testing.T) {
+	cli := filepath.Join(t.TempDir(), "codex")
+	childPIDFile := filepath.Join(t.TempDir(), "cancel-child.pid")
+	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+
+pidfile="${KILROY_CANCEL_CHILD_PID_FILE:?missing pidfile}"
+bash -c 'while true; do sleep 1; done' &
+child="$!"
+echo "$child" > "$pidfile"
+echo "codex started" >&2
+
+while true; do
+  sleep 60
+done
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
+	stderrPath := filepath.Join(t.TempDir(), "stderr.log")
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stdoutFile.Close() }()
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stderrFile.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cli)
+	cmd.Env = append(os.Environ(), "KILROY_CANCEL_CHILD_PID_FILE="+childPIDFile)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start cmd: %v", err)
+	}
+
+	pidDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(pidDeadline) {
+		if _, err := os.Stat(childPIDFile); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(childPIDFile); err != nil {
+		t.Fatalf("wait for child pid file: %v", err)
+	}
+
+	cancel()
+	runErr, timedOut, waitErr := waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, 30*time.Minute, 200*time.Millisecond)
+	if waitErr != nil {
+		t.Fatalf("waitWithIdleWatchdog error: %v", waitErr)
+	}
+	if timedOut {
+		t.Fatalf("waitWithIdleWatchdog should report context cancellation, not idle timeout")
+	}
+	if runErr == nil || !strings.Contains(strings.ToLower(runErr.Error()), "context canceled") {
+		t.Fatalf("runErr: got %v want context canceled", runErr)
+	}
+
+	pidBytes, err := os.ReadFile(childPIDFile)
+	if err != nil {
+		t.Fatalf("read child pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parse child pid: %v (raw=%q)", err, string(pidBytes))
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processExists(pid) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("cancel child process pid=%d still exists", pid)
 }
 
 func processExists(pid int) bool {

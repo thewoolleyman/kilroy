@@ -451,6 +451,30 @@ func hasModelID(catalog *modeldb.LiteLLMCatalog, provider string, id string) boo
 	return normalizeProviderKey(entry.LiteLLMProvider) == provider
 }
 
+func catalogHasProviderModel(catalog *modeldb.LiteLLMCatalog, provider string, modelID string) bool {
+	if catalog == nil || catalog.Models == nil {
+		return false
+	}
+	provider = normalizeProviderKey(provider)
+	modelID = strings.TrimSpace(modelID)
+	if provider == "" || modelID == "" {
+		return false
+	}
+	for id, entry := range catalog.Models {
+		if normalizeProviderKey(entry.LiteLLMProvider) != provider {
+			continue
+		}
+		key := strings.TrimSpace(id)
+		if strings.EqualFold(key, modelID) {
+			return true
+		}
+		if strings.EqualFold(providerModelIDFromCatalogKey(provider, key), modelID) {
+			return true
+		}
+	}
+	return false
+}
+
 func providerModelIDFromCatalogKey(provider string, id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -838,7 +862,11 @@ func buildCodexIsolatedEnv(stageDir string) ([]string, map[string]any, error) {
 }
 
 func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string) ([]string, map[string]any, error) {
-	codexHome := filepath.Join(stageDir, homeDirName)
+	absStageDir, err := filepath.Abs(stageDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	codexHome := filepath.Join(absStageDir, homeDirName)
 	codexStateRoot := filepath.Join(codexHome, ".codex")
 	xdgConfigHome := filepath.Join(codexHome, ".config")
 	xdgDataHome := filepath.Join(codexHome, ".local", "share")
@@ -900,7 +928,7 @@ func copyIfExists(src string, dst string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return false, err
 	}
-	if err := copyFileContents(src, dst); err != nil {
+	if err := copyFileContentsWithMode(src, dst, 0o600); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -972,6 +1000,7 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 	const pollInterval = 250 * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	ownsProcessGroup := cmd != nil && cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid
 
 	lastActivity := time.Now()
 	lastStdoutSize, _ := fileSize(stdoutPath)
@@ -992,8 +1021,10 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 				continue
 			}
 			timeoutErr := fmt.Errorf("codex idle timeout after %s with no output", idleTimeout)
-			if err := killProcessGroup(cmd, syscall.SIGTERM); err != nil {
-				return timeoutErr, true, err
+			if ownsProcessGroup {
+				if err := killProcessGroup(cmd, syscall.SIGTERM); err != nil {
+					return timeoutErr, true, err
+				}
 			}
 			if killGrace > 0 {
 				select {
@@ -1002,8 +1033,10 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 				case <-time.After(killGrace):
 				}
 			}
-			if err := killProcessGroup(cmd, syscall.SIGKILL); err != nil {
-				return timeoutErr, true, err
+			if ownsProcessGroup {
+				if err := killProcessGroup(cmd, syscall.SIGKILL); err != nil {
+					return timeoutErr, true, err
+				}
 			}
 			select {
 			case <-waitCh:
@@ -1012,6 +1045,27 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 				return timeoutErr, true, fmt.Errorf("timed out waiting for process exit after SIGKILL")
 			}
 		case <-ctx.Done():
+			if ownsProcessGroup {
+				if err := killProcessGroup(cmd, syscall.SIGTERM); err != nil {
+					return ctx.Err(), false, err
+				}
+				if killGrace > 0 {
+					select {
+					case <-waitCh:
+						return ctx.Err(), false, nil
+					case <-time.After(killGrace):
+					}
+				}
+				if err := killProcessGroup(cmd, syscall.SIGKILL); err != nil {
+					return ctx.Err(), false, err
+				}
+				select {
+				case <-waitCh:
+					return ctx.Err(), false, nil
+				case <-time.After(2 * time.Second):
+					return ctx.Err(), false, fmt.Errorf("timed out waiting for process exit after context cancellation")
+				}
+			}
 			waitErr := <-waitCh
 			if waitErr == nil {
 				waitErr = ctx.Err()
@@ -1151,7 +1205,8 @@ func isSchemaValidationFailure(stderr string) bool {
 func isStateDBDiscrepancy(stderr string) bool {
 	s := strings.ToLower(stderr)
 	return strings.Contains(s, "state db missing rollout path") ||
-		strings.Contains(s, "state db record_discrepancy")
+		strings.Contains(s, "state db record_discrepancy") ||
+		strings.Contains(s, "record_discrepancy")
 }
 
 func removeArgWithValue(args []string, key string) []string {
@@ -1169,16 +1224,24 @@ func removeArgWithValue(args []string, key string) []string {
 }
 
 func copyFileContents(src string, dst string) error {
+	return copyFileContentsWithMode(src, dst, 0o644)
+}
+
+func copyFileContentsWithMode(src string, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Chmod(perm); err != nil {
 		_ = out.Close()
 		return err
 	}

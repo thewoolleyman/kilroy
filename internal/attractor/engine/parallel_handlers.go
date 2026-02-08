@@ -138,11 +138,26 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	if key == "" {
 		key = fmt.Sprintf("branch-%d", idx+1)
 	}
+	prefix := strings.TrimSpace(exec.Engine.Options.RunBranchPrefix)
+	if prefix == "" {
+		msg := "parallel fan-out requires non-empty run_branch_prefix"
+		return parallelBranchResult{
+			BranchKey:   key,
+			BranchName:  "",
+			StartNodeID: edge.To,
+			StopNodeID:  joinID,
+			Error:       msg,
+			Outcome: runtime.Outcome{
+				Status:        runtime.StatusFail,
+				FailureReason: msg,
+			},
+		}
+	}
 
 	// IMPORTANT: git ref namespace rules forbid creating refs under an existing ref path.
 	// Since the main run branch is typically "attractor/run/<run_id>", parallel branches
 	// MUST NOT be nested under that ref. Use a sibling namespace instead.
-	branchName := fmt.Sprintf("%s/parallel/%s/%s/%s", exec.Engine.Options.RunBranchPrefix, exec.Engine.Options.RunID, sanitizeRefComponent(parallelNode.ID), key)
+	branchName := buildParallelBranch(prefix, exec.Engine.Options.RunID, parallelNode.ID, key)
 	branchRoot := filepath.Join(exec.LogsRoot, "parallel", parallelNode.ID, fmt.Sprintf("%02d-%s", idx+1, key))
 	worktreeDir := filepath.Join(branchRoot, "worktree")
 

@@ -19,6 +19,7 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Default args use `codex exec --json --sandbox workspace-write ...`.
   - Deprecated `--ask-for-approval` is intentionally not used.
   - Attractor isolates Codex runtime state per stage (`env_mode=isolated`, `env_scope=codex`, stage-local `state_root`).
+  - Sensitive Codex state roots (`codex-home*`, `.codex/auth.json`, `.codex/config.toml`) are excluded from `stage.tgz` and `run.tgz`.
   - Idle watchdog enforces process-group cleanup for stalled Codex CLI stages.
 - Codex schema behavior:
   - Structured output schema is strict (`required: ["final","summary"]`, `additionalProperties: false`).
@@ -27,3 +28,14 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
 - Loop safety:
   - Use `loop_restart=true` on retry-loop edges that jump back to earlier stages.
   - Set graph-level `max_restarts` to bound cycle count and prevent unbounded runs.
+- Detached runs:
+  - Launch long-running jobs with `./kilroy attractor run --detach --graph <graph.dot> --config <run.yaml> --run-id <run_id> --logs-root <logs_root>`.
+  - Detached launch writes `<logs_root>/run.pid` and appends launcher/child output to `<logs_root>/run.out`.
+- Monitoring:
+  - Stream progress with `tail -f <logs_root>/progress.ndjson`.
+  - Inspect terminal status with `cat <logs_root>/final.json`.
+  - For detached runs, check launcher output fields: `detached=true`, `logs_root=...`, `pid_file=...`.
+- Restart artifacts:
+  - Base logs root remains the canonical root for run-level artifacts.
+  - Each restart iteration writes to `<logs_root>/restart-<n>/...`.
+  - Terminal `final.json` is persisted at both current restart root and base logs root.

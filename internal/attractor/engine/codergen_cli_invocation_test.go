@@ -87,6 +87,48 @@ func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 
 	assertExists(t, filepath.Join(wantStateRoot, "auth.json"))
 	assertExists(t, filepath.Join(wantStateRoot, "config.toml"))
+	authInfo, err := os.Stat(filepath.Join(wantStateRoot, "auth.json"))
+	if err != nil {
+		t.Fatalf("stat auth.json: %v", err)
+	}
+	if got := authInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("auth.json perms: got %#o want %#o", got, 0o600)
+	}
+	cfgInfo, err := os.Stat(filepath.Join(wantStateRoot, "config.toml"))
+	if err != nil {
+		t.Fatalf("stat config.toml: %v", err)
+	}
+	if got := cfgInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config.toml perms: got %#o want %#o", got, 0o600)
+	}
+}
+
+func TestIsStateDBDiscrepancy_MatchesRecordDiscrepancySignature(t *testing.T) {
+	if !isStateDBDiscrepancy("fatal: record_discrepancy while loading thread state") {
+		t.Fatalf("expected bare record_discrepancy signature to match")
+	}
+}
+
+func TestCodexCLIInvocation_StateRootIsAbsolute(t *testing.T) {
+	wd := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	stageDir := filepath.Join("relative", "stage")
+	_, meta, err := buildCodexIsolatedEnv(stageDir)
+	if err != nil {
+		t.Fatalf("buildCodexIsolatedEnv: %v", err)
+	}
+	stateRoot := strings.TrimSpace(anyToString(meta["state_root"]))
+	if !filepath.IsAbs(stateRoot) {
+		t.Fatalf("state_root should be absolute, got %q", stateRoot)
+	}
 }
 
 func envLookup(env []string, key string) string {
