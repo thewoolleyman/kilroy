@@ -169,6 +169,9 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 				return nil, err
 			}
 			startup = startupInfo
+			if startupInfo != nil {
+				defer func() { _ = startupInfo.shutdownManagedProcesses() }()
+			}
 			defer func() { _ = bin.Close() }()
 			bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
 			if err != nil {

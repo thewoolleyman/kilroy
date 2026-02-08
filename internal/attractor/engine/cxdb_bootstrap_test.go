@@ -2,11 +2,15 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -116,4 +120,161 @@ func TestResolveUIURL_PrefersConfiguredAndFallsBackToBaseProbe(t *testing.T) {
 	if got := resolveUIURL(ctx, "", htmlSrv.URL); got != htmlSrv.URL {
 		t.Fatalf("base URL probe failed, got %q want %q", got, htmlSrv.URL)
 	}
+}
+
+func TestStartBackgroundCommand_KeepsLogOpenUntilWaitCompletes(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "bg.log")
+	cmdPath := filepath.Join(t.TempDir(), "writer.sh")
+	if err := os.WriteFile(cmdPath, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+echo first-line
+sleep 0.25
+echo second-line
+`), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	proc, err := startBackgroundCommand([]string{cmdPath}, logPath, nil)
+	if err != nil {
+		t.Fatalf("startBackgroundCommand: %v", err)
+	}
+	select {
+	case waitErr := <-proc.waitCh:
+		if waitErr != nil {
+			t.Fatalf("background process failed: %v", waitErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for background process completion")
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", logPath, err)
+	}
+	logText := string(b)
+	if !strings.Contains(logText, "first-line") || !strings.Contains(logText, "second-line") {
+		t.Fatalf("expected complete delayed log output, got %q", logText)
+	}
+}
+
+func TestEnsureCXDBReady_AutostartProcessTerminatedOnContextCancel(t *testing.T) {
+	logsRoot := t.TempDir()
+	pidPath := filepath.Join(logsRoot, "cxdb-autostart.pid")
+	cmdPath := filepath.Join(logsRoot, "cxdb-autostart.sh")
+	if err := os.WriteFile(cmdPath, []byte(fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+echo "$$" > %q
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+`, pidPath)), 0o755); err != nil {
+		t.Fatalf("write autostart script: %v", err)
+	}
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.CXDB.BinaryAddr = "127.0.0.1:65530"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:65531"
+	cfg.CXDB.Autostart.Enabled = true
+	cfg.CXDB.Autostart.Command = []string{cmdPath}
+	cfg.CXDB.Autostart.WaitTimeoutMS = 10_000
+	cfg.CXDB.Autostart.PollIntervalMS = 50
+	applyConfigDefaults(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, _, _, err := ensureCXDBReady(ctx, cfg, logsRoot, "cancel-run")
+	if err == nil {
+		t.Fatalf("expected cancellation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pid := mustReadPIDFileWithin(t, pidPath, 2*time.Second)
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	})
+	waitForPIDToExit(t, pid, 5*time.Second)
+}
+
+func TestEnsureCXDBReady_UIAutostartProcessTerminatedOnRunShutdown(t *testing.T) {
+	cxdbSrv := newCXDBTestServer(t)
+	logsRoot := t.TempDir()
+	pidPath := filepath.Join(logsRoot, "ui-autostart.pid")
+	cmdPath := filepath.Join(logsRoot, "ui-autostart.sh")
+	if err := os.WriteFile(cmdPath, []byte(fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+echo "$$" > %q
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+`, pidPath)), 0o755); err != nil {
+		t.Fatalf("write ui script: %v", err)
+	}
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.CXDB.Autostart.UI.Enabled = true
+	cfg.CXDB.Autostart.UI.Command = []string{cmdPath}
+	applyConfigDefaults(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, bin, startup, err := ensureCXDBReady(ctx, cfg, logsRoot, "ui-shutdown")
+	if err != nil {
+		t.Fatalf("ensureCXDBReady: %v", err)
+	}
+	defer func() { _ = bin.Close() }()
+	if startup == nil || !startup.UIStarted {
+		t.Fatalf("expected startup info with UIStarted=true, got %#v", startup)
+	}
+
+	pid := mustReadPIDFileWithin(t, pidPath, 2*time.Second)
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	})
+	if err := startup.shutdownManagedProcesses(); err != nil {
+		t.Fatalf("shutdownManagedProcesses: %v", err)
+	}
+	waitForPIDToExit(t, pid, 5*time.Second)
+}
+
+func mustReadPIDFileWithin(t *testing.T, path string, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(b)))
+			if convErr != nil || pid <= 0 {
+				t.Fatalf("invalid pid in %s: %q (%v)", path, strings.TrimSpace(string(b)), convErr)
+			}
+			return pid
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read pid file %s: %v", path, err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for pid file %s", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func waitForPIDToExit(t *testing.T, pid int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if !pidRunning(pid) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d still running after %s", pid, timeout)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func pidRunning(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

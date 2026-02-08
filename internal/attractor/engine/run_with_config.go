@@ -107,6 +107,9 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
+	if startup != nil {
+		defer func() { _ = startup.shutdownManagedProcesses() }()
+	}
 	if startup != nil && overrides.OnCXDBStartup != nil {
 		overrides.OnCXDBStartup(*startup)
 	}

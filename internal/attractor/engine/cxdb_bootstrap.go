@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sync"
+	"syscall"
 	"strings"
 	"time"
 
@@ -30,11 +32,79 @@ type CXDBStartupInfo struct {
 	UIURL     string
 	UIStarted bool
 	Warnings  []string
+
+	managedMu sync.Mutex
+	managed   []*startedProcess
 }
 
 type startedProcess struct {
 	PID    int
+	cmd    *exec.Cmd
 	waitCh <-chan error
+
+	terminateOnce sync.Once
+	terminateErr  error
+}
+
+func (p *startedProcess) terminate(grace time.Duration) error {
+	if p == nil {
+		return nil
+	}
+	p.terminateOnce.Do(func() {
+		if p.cmd == nil || p.cmd.Process == nil {
+			return
+		}
+		if err := killProcessGroup(p.cmd, syscall.SIGTERM); err != nil {
+			p.terminateErr = err
+			return
+		}
+		if grace <= 0 {
+			grace = 250 * time.Millisecond
+		}
+		select {
+		case <-p.waitCh:
+			return
+		case <-time.After(grace):
+		}
+		if err := killProcessGroup(p.cmd, syscall.SIGKILL); err != nil {
+			p.terminateErr = err
+			return
+		}
+		select {
+		case <-p.waitCh:
+		case <-time.After(2 * time.Second):
+			p.terminateErr = fmt.Errorf("timed out waiting for process %d to exit after SIGKILL", p.PID)
+		}
+	})
+	return p.terminateErr
+}
+
+func (i *CXDBStartupInfo) registerManagedProcess(proc *startedProcess) {
+	if i == nil || proc == nil {
+		return
+	}
+	i.managedMu.Lock()
+	i.managed = append(i.managed, proc)
+	i.managedMu.Unlock()
+}
+
+func (i *CXDBStartupInfo) shutdownManagedProcesses() error {
+	if i == nil {
+		return nil
+	}
+	i.managedMu.Lock()
+	procs := append([]*startedProcess{}, i.managed...)
+	i.managedMu.Unlock()
+	errs := make([]string, 0)
+	for _, proc := range procs {
+		if err := proc.terminate(500 * time.Millisecond); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("managed process shutdown errors: %s", strings.Join(errs, "; "))
 }
 
 func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, runID string) (*cxdb.Client, *cxdb.BinaryClient, *CXDBStartupInfo, error) {
@@ -88,6 +158,11 @@ func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, r
 		return nil, nil, nil, fmt.Errorf("cxdb autostart failed: %w", startErr)
 	}
 	info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB autostart launched (pid=%d, log=%s)", proc.PID, logPath))
+	terminateAutostart := func() {
+		if err := proc.terminate(500 * time.Millisecond); err != nil {
+			info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB autostart cleanup warning: %v", err))
+		}
+	}
 
 	waitTimeout := time.Duration(cfg.CXDB.Autostart.WaitTimeoutMS) * time.Millisecond
 	if waitTimeout <= 0 {
@@ -112,6 +187,7 @@ func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, r
 
 		bin, err = connect()
 		if err == nil {
+			info.registerManagedProcess(proc)
 			startCXDBUI(ctx, cfg, logsRoot, runID, info)
 			return client, bin, info, nil
 		}
@@ -121,6 +197,7 @@ func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, r
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			terminateAutostart()
 			return nil, nil, nil, ctx.Err()
 		case procErr := <-proc.waitCh:
 			timer.Stop()
@@ -131,6 +208,7 @@ func ensureCXDBReady(ctx context.Context, cfg *RunConfigFile, logsRoot string, r
 		case <-timer.C:
 		}
 	}
+	terminateAutostart()
 	return nil, nil, nil, fmt.Errorf(
 		"cxdb autostart timed out after %s (http=%s binary=%s): %w (log=%s)",
 		waitTimeout.String(),
@@ -182,6 +260,7 @@ func startCXDBUI(ctx context.Context, cfg *RunConfigFile, logsRoot string, runID
 		info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB UI launch failed: %v", err))
 		return
 	}
+	info.registerManagedProcess(proc)
 	info.UIStarted = true
 	info.Warnings = append(info.Warnings, fmt.Sprintf("CXDB UI launch command started (pid=%d, log=%s)", proc.PID, logPath))
 
@@ -287,6 +366,7 @@ func startBackgroundCommand(parts []string, logPath string, extraEnv []string) (
 	}
 	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var logFile *os.File
 	if strings.TrimSpace(logPath) != "" {
@@ -311,17 +391,18 @@ func startBackgroundCommand(parts []string, logPath string, extraEnv []string) (
 		}
 		return nil, fmt.Errorf("%s: %w", strings.Join(parts, " "), err)
 	}
-	if logFile != nil {
-		_ = logFile.Close()
-	}
 
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		close(waitCh)
 	}()
 	return &startedProcess{
 		PID:    cmd.Process.Pid,
+		cmd:    cmd,
 		waitCh: waitCh,
 	}, nil
 }
