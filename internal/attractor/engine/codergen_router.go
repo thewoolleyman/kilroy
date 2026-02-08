@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/strongdm/kilroy/internal/agent"
