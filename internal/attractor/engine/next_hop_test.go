@@ -22,7 +22,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext())
+	}, runtime.NewContext(), "")
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -49,7 +49,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext())
+	}, runtime.NewContext(), failureClassTransientInfra)
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -85,7 +85,7 @@ digraph G {
 	hop, err := resolveNextHop(g, "join", runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: "all parallel branches failed",
-	}, runtime.NewContext())
+	}, runtime.NewContext(), "")
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
@@ -180,7 +180,7 @@ digraph G {
 	if err != nil {
 		t.Fatalf("selectNextEdge: %v", err)
 	}
-	got, err := resolveNextHop(g, "a", out, ctx)
+	got, err := resolveNextHop(g, "a", out, ctx, "")
 	if err != nil {
 		t.Fatalf("resolveNextHop: %v", err)
 	}
