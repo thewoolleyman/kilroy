@@ -51,6 +51,13 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)", p)
 		}
 	}
+	runUsesCLIProviders := false
+	for p := range usedProviders {
+		if rt, ok := runtimes[p]; ok && rt.Backend == BackendCLI {
+			runUsesCLIProviders = true
+			break
+		}
+	}
 
 	opts := RunOptions{
 		RepoPath:        cfg.Repo.Path,
@@ -75,7 +82,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
 	}
-	if err := validateRunCLIProfilePolicy(cfg, opts); err != nil {
+	if err := validateRunCLIProfilePolicy(cfg, opts, runUsesCLIProviders); err != nil {
 		report := &providerPreflightReport{
 			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 			CLIProfile:          normalizedCLIProfile(cfg),

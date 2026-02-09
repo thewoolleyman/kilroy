@@ -245,6 +245,8 @@ func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) 
 
 func TestRunWithConfig_AllowsKimiAndZai_WhenCatalogUsesOpenRouterPrefixes(t *testing.T) {
 	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	t.Setenv("KIMI_API_KEY", "k-kimi")
+	t.Setenv("ZAI_API_KEY", "k-zai")
 
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
@@ -271,11 +273,7 @@ digraph G {
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
-		RunID:         "preflight-openrouter-prefix",
-		LogsRoot:      logsRoot,
-		AllowTestShim: true,
-	})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-openrouter-prefix", LogsRoot: logsRoot})
 	if err == nil {
 		t.Fatalf("expected downstream cxdb error, got nil")
 	}

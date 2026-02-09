@@ -72,6 +72,18 @@ digraph G {
 }
 
 func TestRunWithConfig_RejectsTestShimWithoutAllowFlag(t *testing.T) {
+	cfg := &RunConfigFile{}
+	cfg.LLM.CLIProfile = "test_shim"
+	err := validateRunCLIProfilePolicy(cfg, RunOptions{}, true)
+	if err == nil {
+		t.Fatalf("expected test_shim gate error, got nil")
+	}
+	if !strings.Contains(err.Error(), "llm.cli_profile=test_shim requires --allow-test-shim") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithConfig_DoesNotRequireAllowTestShim_ForAPIOnlyProviders(t *testing.T) {
 	repo := initTestRepo(t)
 	cfg := &RunConfigFile{}
 	cfg.Version = 1
@@ -80,7 +92,7 @@ func TestRunWithConfig_RejectsTestShimWithoutAllowFlag(t *testing.T) {
 	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9010"
 	cfg.LLM.CLIProfile = "test_shim"
 	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai": {Backend: BackendCLI, Executable: "/tmp/fake/codex"},
+		"openai": {Backend: BackendAPI},
 	}
 	cfg.ModelDB.OpenRouterModelInfoPath = writePinnedCatalog(t)
 	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
@@ -89,17 +101,22 @@ func TestRunWithConfig_RejectsTestShimWithoutAllowFlag(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  start -> exit
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.3-codex", prompt="hi"]
+  start -> a -> exit
 }
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "shim-no-allow", LogsRoot: t.TempDir()})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-no-shim-gate", LogsRoot: t.TempDir()})
 	if err == nil {
-		t.Fatalf("expected test_shim gate error, got nil")
+		t.Fatalf("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "llm.cli_profile=test_shim requires --allow-test-shim") {
-		t.Fatalf("unexpected error: %v", err)
+	if strings.Contains(err.Error(), "--allow-test-shim") {
+		t.Fatalf("did not expect test_shim gate for api-only run: %v", err)
+	}
+	want := "preflight: llm_provider=openai backend=api model=gpt-5.3-codex not present in run catalog"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected provider/model catalog error %q, got %v", want, err)
 	}
 }
 
