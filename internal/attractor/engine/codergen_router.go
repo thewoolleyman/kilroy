@@ -644,7 +644,11 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 
-	defaultExe, args := defaultCLIInvocation(provider, modelID, execCtx.WorktreeDir)
+	spec := defaultCLISpecForProvider(provider)
+	if spec == nil {
+		return "", classifiedFailure(fmt.Errorf("no cli invocation mapping for provider %s", provider), ""), nil
+	}
+	defaultExe, args := materializeCLIInvocation(*spec, modelID, execCtx.WorktreeDir, "")
 	if defaultExe == "" {
 		return "", classifiedFailure(fmt.Errorf("no cli invocation mapping for provider %s", provider), ""), nil
 	}
