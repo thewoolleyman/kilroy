@@ -124,11 +124,21 @@ type Spec struct {
 	Failover []string
 }
 
-var providerAliases = map[string]string{
-	"gemini":   "google",
-	"z-ai":     "zai",
-	"z.ai":     "zai",
-	"moonshot": "kimi",
+var providerAliases = providerAliasIndexFromBuiltins()
+
+func providerAliasIndexFromBuiltins() map[string]string {
+	out := map[string]string{}
+	for key, spec := range builtinSpecs {
+		k := strings.ToLower(strings.TrimSpace(key))
+		out[k] = k
+		for _, alias := range spec.Aliases {
+			a := strings.ToLower(strings.TrimSpace(alias))
+			if a != "" {
+				out[a] = k
+			}
+		}
+	}
+	return out
 }
 
 func CanonicalProviderKey(in string) string {
@@ -535,8 +545,15 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 	}
 
 	// Ensure failover targets are resolvable even when not explicitly configured.
-	// This preserves current fallback behavior for builtins like openai/anthropic/google.
-	for _, rt := range out {
+	// Iterate to closure so nested failover chains are also synthesized.
+	queue := make([]string, 0, len(out))
+	for k := range out {
+		queue = append(queue, k)
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		rt := out[cur]
 		for _, target := range rt.Failover {
 			if _, ok := out[target]; ok {
 				continue
@@ -557,6 +574,7 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 				synth.ProfileFamily = b.API.ProfileFamily
 			}
 			out[target] = synth
+			queue = append(queue, target)
 		}
 	}
 	return out, nil
@@ -613,8 +631,8 @@ git commit -m "feat(engine): resolve runtime provider definitions from builtin s
 ### Task 4: Refactor API Client Construction to Protocol Factories
 
 **Files:**
-- Create: `internal/llmclient/from_runtime.go`
-- Create: `internal/llmclient/from_runtime_test.go`
+- Create: `internal/attractor/engine/api_client_from_runtime.go`
+- Create: `internal/attractor/engine/api_client_from_runtime_test.go`
 - Modify: `internal/llm/providers/openai/adapter.go`
 - Modify: `internal/llm/providers/anthropic/adapter.go`
 - Modify: `internal/llm/providers/google/adapter.go`
@@ -625,14 +643,14 @@ git commit -m "feat(engine): resolve runtime provider definitions from builtin s
 **Step 1: Write the failing test**
 
 ```go
-func TestNewFromProviderRuntimes_RegistersAdaptersByProtocol(t *testing.T) {
-	runtimes := map[string]engine.ProviderRuntime{
-		"openai": {Key: "openai", Backend: engine.BackendAPI, API: providerspec.APISpec{Protocol: providerspec.ProtocolOpenAIResponses, DefaultBaseURL: "http://127.0.0.1:0", DefaultAPIKeyEnv: "OPENAI_API_KEY", ProviderOptionsKey: "openai"}},
+func TestNewAPIClientFromProviderRuntimes_RegistersAdaptersByProtocol(t *testing.T) {
+	runtimes := map[string]ProviderRuntime{
+		"openai": {Key: "openai", Backend: BackendAPI, API: providerspec.APISpec{Protocol: providerspec.ProtocolOpenAIResponses, DefaultBaseURL: "http://127.0.0.1:0", DefaultAPIKeyEnv: "OPENAI_API_KEY", ProviderOptionsKey: "openai"}},
 	}
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	c, err := NewFromProviderRuntimes(runtimes)
+	c, err := newAPIClientFromProviderRuntimes(runtimes)
 	if err != nil {
-		t.Fatalf("NewFromProviderRuntimes: %v", err)
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
 	}
 	if len(c.ProviderNames()) != 1 {
 		t.Fatalf("expected one adapter")
@@ -649,18 +667,18 @@ func TestOpenAIAdapter_NewWithProvider_UsesConfiguredName(t *testing.T) {
 
 **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/llmclient ./internal/llm/providers/openai ./internal/llm/providers/anthropic ./internal/llm/providers/google -run 'TestNewFromProviderRuntimes_RegistersAdaptersByProtocol|TestOpenAIAdapter_NewWithProvider_UsesConfiguredName' -v`
-Expected: FAIL (`NewFromProviderRuntimes` undefined)
+Run: `go test ./internal/attractor/engine ./internal/llm/providers/openai ./internal/llm/providers/anthropic ./internal/llm/providers/google -run 'TestNewAPIClientFromProviderRuntimes_RegistersAdaptersByProtocol|TestOpenAIAdapter_NewWithProvider_UsesConfiguredName' -v`
+Expected: FAIL (`newAPIClientFromProviderRuntimes` undefined)
 
 **Step 3: Write minimal implementation**
 
 ```go
-func NewFromProviderRuntimes(runtimes map[string]engine.ProviderRuntime) (*llm.Client, error) {
+func newAPIClientFromProviderRuntimes(runtimes map[string]ProviderRuntime) (*llm.Client, error) {
 	c := llm.NewClient()
 	keys := sortedKeys(runtimes)
 	for _, key := range keys {
 		rt := runtimes[key]
-		if rt.Backend != engine.BackendAPI {
+		if rt.Backend != BackendAPI {
 			continue
 		}
 		apiKey := strings.TrimSpace(os.Getenv(rt.API.DefaultAPIKeyEnv))
@@ -721,7 +739,12 @@ func NewFromEnv() (*Adapter, error) {
 	return NewWithProvider("openai", key, os.Getenv("OPENAI_BASE_URL")), nil
 }
 
-func (a *Adapter) Name() string { return a.Provider }
+func (a *Adapter) Name() string {
+	if p := providerspec.CanonicalProviderKey(a.Provider); p != "" {
+		return p
+	}
+	return "openai"
+}
 ```
 
 Apply the same constructor/name pattern in:
@@ -756,21 +779,26 @@ func NewFromEnv() (*Adapter, error) {
 Backward-compatibility rule:
 - Keep each provider `init()` env registration factory as-is.
 - `init()` continues to call `NewFromEnv()`, and `NewFromEnv()` must always set the canonical provider key (`openai`/`anthropic`/`google`) so adapter registration names remain stable.
+- `Name()` must provide legacy defaults when `Provider` is empty (`openai`/`anthropic`/`google`) so existing struct literals in tests keep working.
+- Anthropic example: `func (a *Adapter) Name() string { if p := providerspec.CanonicalProviderKey(a.Provider); p != "" { return p }; return "anthropic" }`
+- Google example: `func (a *Adapter) Name() string { if p := providerspec.CanonicalProviderKey(a.Provider); p != "" { return p }; return "google" }`
+- Audit direct adapter literals after struct change with `rg -n "openai\\.Adapter\\{|anthropic\\.Adapter\\{|google\\.Adapter\\{" internal -g '*_test.go'`.
+- Convert remaining literals to constructor usage or set `Provider` explicitly where needed.
 
 Sequencing note:
 - Task 4 intentionally wires OpenAI/Anthropic/Google first.
-- Task 5 adds `ProtocolOpenAIChatCompletions` support and updates `internal/llmclient/from_runtime.go` in the same commit as `openaicompat`.
+- Task 5 adds `ProtocolOpenAIChatCompletions` support and updates `internal/attractor/engine/api_client_from_runtime.go` in the same commit as `openaicompat`.
 
 **Step 4: Run test to verify it passes**
 
-Run: `go test ./internal/llmclient ./internal/llm/providers/openai ./internal/llm/providers/anthropic ./internal/llm/providers/google -v`
+Run: `go test ./internal/attractor/engine ./internal/llm/providers/openai ./internal/llm/providers/anthropic ./internal/llm/providers/google -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add internal/llmclient/from_runtime.go internal/llmclient/from_runtime_test.go internal/llm/providers/openai/adapter.go internal/llm/providers/openai/adapter_test.go internal/llm/providers/anthropic/adapter.go internal/llm/providers/anthropic/adapter_test.go internal/llm/providers/google/adapter.go internal/llm/providers/google/adapter_test.go
-git commit -m "refactor(llmclient): construct API adapters from runtime provider protocol metadata"
+git add internal/attractor/engine/api_client_from_runtime.go internal/attractor/engine/api_client_from_runtime_test.go internal/llm/providers/openai/adapter.go internal/llm/providers/openai/adapter_test.go internal/llm/providers/anthropic/adapter.go internal/llm/providers/anthropic/adapter_test.go internal/llm/providers/google/adapter.go internal/llm/providers/google/adapter_test.go
+git commit -m "refactor(engine): construct API adapters from runtime provider protocol metadata"
 ```
 
 ### Task 5: Implement Generic OpenAI Chat Completions Adapter
@@ -778,8 +806,8 @@ git commit -m "refactor(llmclient): construct API adapters from runtime provider
 **Files:**
 - Create: `internal/llm/providers/openaicompat/adapter.go`
 - Test: `internal/llm/providers/openaicompat/adapter_test.go`
-- Modify: `internal/llmclient/from_runtime.go`
-- Test: `internal/llmclient/from_runtime_test.go`
+- Modify: `internal/attractor/engine/api_client_from_runtime.go`
+- Test: `internal/attractor/engine/api_client_from_runtime_test.go`
 
 **Step 1: Write the failing test**
 
@@ -805,8 +833,10 @@ func TestAdapter_Complete_ChatCompletionsMapsToolCalls(t *testing.T) {
 
 func TestAdapter_Stream_EmitsFinishEvent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"c2","model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
@@ -891,27 +921,77 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
 	sctx, cancel := context.WithCancel(ctx)
+	body, err := toChatCompletionsBody(req, a.cfg.OptionsKey)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		cancel()
+		return nil, err
+	}
+	bodyMap["stream"] = true
+	body, err = json.Marshal(bodyMap)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(sctx, http.MethodPost, a.cfg.BaseURL+a.cfg.Path, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, llm.WrapContextError(a.cfg.Provider, err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	for k, v := range a.cfg.ExtraHeaders {
+		httpReq.Header.Set(k, v)
+	}
+
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		cancel()
+		return nil, llm.WrapContextError(a.cfg.Provider, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		cancel()
+		_, perr := parseChatCompletionsResponse(a.cfg.Provider, req.Model, resp)
+		return nil, perr
+	}
+
 	s := llm.NewChanStream(cancel)
 	go func() {
+		defer resp.Body.Close()
 		defer s.CloseSend()
 		s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
-		resp, err := a.Complete(sctx, req)
-		if err != nil {
+		acc := llm.NewStreamAccumulator()
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "" {
+				continue
+			}
+			if payload == "[DONE]" {
+				final := acc.BuildResponse(a.cfg.Provider, req.Model)
+				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &final.Finish, Usage: &final.Usage, Response: &final})
+				return
+			}
+			var chunk map[string]any
+			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError(a.cfg.Provider, err.Error())})
+				return
+			}
+			emitChatCompletionsChunkEvents(s, acc, chunk)
+		}
+		if err := sc.Err(); err != nil {
 			s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError(a.cfg.Provider, err.Error())})
-			return
 		}
-		if txt := resp.Text(); txt != "" {
-			s.Send(llm.StreamEvent{Type: llm.StreamEventTextStart, TextID: "assistant_text"})
-			s.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "assistant_text", Delta: txt})
-			s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: "assistant_text"})
-		}
-		for _, tc := range resp.ToolCalls() {
-			call := tc
-			s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &call})
-			s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallEnd, ToolCall: &call})
-		}
-		r := resp
-		s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &r.Finish, Usage: &r.Usage, Response: &r})
 	}()
 	return s, nil
 }
@@ -942,13 +1022,17 @@ func parseChatCompletionsResponse(provider, model string, resp *http.Response) (
 	if err != nil {
 		return llm.Response{}, llm.WrapContextError(provider, err)
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw := map[string]any{}
+		if err := json.Unmarshal(rawBytes, &raw); err != nil {
+			raw["raw_body"] = string(rawBytes)
+		}
+		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		return llm.Response{}, llm.ErrorFromHTTPStatus(provider, resp.StatusCode, "chat.completions failed", raw, ra)
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(rawBytes, &raw); err != nil {
 		return llm.Response{}, llm.WrapContextError(provider, err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
-		return llm.Response{}, llm.ErrorFromHTTPStatus(provider, resp.StatusCode, "chat.completions failed", raw, ra)
 	}
 	return fromChatCompletions(provider, model, raw)
 }
@@ -1082,7 +1166,7 @@ func renderAnyAsText(v any) string {
 func asString(v any) string {
 	switch x := v.(type) {
 	case string:
-		return strings.TrimSpace(x)
+		return x
 	case json.Number:
 		return x.String()
 	default:
@@ -1126,10 +1210,16 @@ func normalizeFinishReason(in string) string {
 		return strings.ToLower(strings.TrimSpace(in))
 	}
 }
+
+func emitChatCompletionsChunkEvents(s *llm.ChanStream, acc *llm.StreamAccumulator, chunk map[string]any) {
+	// Parse delta content/tool_calls from each chunk, update accumulator,
+	// and emit TEXT_DELTA / TOOL_CALL_DELTA / STEP_FINISH events.
+	// (Mirror event semantics used by existing OpenAI/Anthropic/Google adapters.)
+}
 ```
 
 ```go
-// internal/llmclient/from_runtime.go (Task 5 follow-up wiring)
+// internal/attractor/engine/api_client_from_runtime.go (Task 5 follow-up wiring)
 case providerspec.ProtocolOpenAIChatCompletions:
 	c.Register(openaicompat.NewAdapter(openaicompat.Config{
 		Provider:     key,
@@ -1143,13 +1233,13 @@ case providerspec.ProtocolOpenAIChatCompletions:
 
 **Step 4: Run test to verify it passes**
 
-Run: `go test ./internal/llm/providers/openaicompat ./internal/llmclient -v`
+Run: `go test ./internal/llm/providers/openaicompat ./internal/attractor/engine -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add internal/llm/providers/openaicompat/adapter.go internal/llm/providers/openaicompat/adapter_test.go internal/llmclient/from_runtime.go internal/llmclient/from_runtime_test.go
+git add internal/llm/providers/openaicompat/adapter.go internal/llm/providers/openaicompat/adapter_test.go internal/attractor/engine/api_client_from_runtime.go internal/attractor/engine/api_client_from_runtime_test.go
 git commit -m "feat(llm): add generic OpenAI Chat Completions adapter for protocol-based providers"
 ```
 
@@ -1262,6 +1352,34 @@ func bestModelForProvider(catalog *modeldb.LiteLLMCatalog, provider string) stri
 		return ""
 	}
 	return providerModelIDFromCatalogKey(provider, ids[0])
+}
+
+func NewCodergenRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.LiteLLMCatalog, runtimes map[string]ProviderRuntime) *CodergenRouter {
+	r := NewCodergenRouter(cfg, catalog)
+	r.providerRuntimes = runtimes
+	return r
+}
+
+func (r *CodergenRouter) ensureAPIClient() {
+	if r.apiClient != nil || r.apiErr != nil {
+		return
+	}
+	if len(r.providerRuntimes) > 0 {
+		r.apiClient, r.apiErr = newAPIClientFromProviderRuntimes(r.providerRuntimes)
+		return
+	}
+	// Backward compatibility path (legacy env-only construction).
+	r.apiClient, r.apiErr = llmclient.NewFromEnv()
+}
+
+func (r *CodergenRouter) withFailoverText(ctx context.Context, primaryProvider, modelID, prompt string) (string, string, error) {
+	order := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
+	for _, p := range order {
+		m := pickFailoverModelFromRuntime(p, r.providerRuntimes, r.catalog, modelID)
+		// existing attemptRequest/shouldFailover logic unchanged
+		_ = m
+	}
+	return "", "", fmt.Errorf("failover exhausted")
 }
 ```
 
@@ -1711,7 +1829,7 @@ Expected: PASS
 **Step 5: Final commit**
 
 ```bash
-git add internal/providerspec internal/llm/providers/openaicompat internal/llm/providers/openai internal/llm/providers/anthropic internal/llm/providers/google internal/llmclient internal/agent internal/attractor/engine README.md docs/strongdm/attractor
+git add $(git diff --name-only)
 git commit -m "refactor(attractor): introduce protocol-driven provider plugin architecture and add kimi/zai api support"
 ```
 
