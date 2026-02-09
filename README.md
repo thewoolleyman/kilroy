@@ -247,6 +247,11 @@ API backend environment variables:
 - Kimi (Coding API key): `KIMI_API_KEY`
 - ZAI: `ZAI_API_KEY`
 
+Kimi compatibility note:
+
+- Built-in `kimi` defaults target Kimi Coding (`anthropic_messages`, `https://api.kimi.com/coding`).
+- If you use Moonshot Open Platform keys instead, override `kimi.api` to `protocol: openai_chat_completions`, `base_url: https://api.moonshot.ai`, `path: /v1/chat/completions`.
+
 ## Run Artifacts
 
 Typical run-level artifacts under `{logs_root}`:
