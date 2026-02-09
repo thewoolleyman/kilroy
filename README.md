@@ -281,3 +281,7 @@ Exit codes:
 - Kilroy metaspec: `docs/strongdm/attractor/kilroy-metaspec.md`
 - Ingestor spec: `docs/strongdm/attractor/ingestor-spec.md`
 - CXDB project: <https://github.com/strongdm/cxdb>
+
+## License
+
+MIT. See `LICENSE`.
