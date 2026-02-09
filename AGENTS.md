@@ -30,6 +30,22 @@ Use explicit run configs and flags so the mode is unambiguous:
 ./kilroy attractor run --detach --graph <graph.dot> --config <run_config_test_shim.json> --allow-test-shim --run-id <run_id> --logs-root <logs_root>
 ```
 
+## Binary Freshness
+
+- Before running `./kilroy attractor run`, ensure `./kilroy` is built from current repo `HEAD`.
+- If stale-build detection triggers, rebuild with `go build -o ./kilroy ./cmd/kilroy` and rerun.
+- Use `--confirm-stale-build` only when intentionally running a stale binary.
+
+## Checking Run Status
+
+Runs live under `~/.local/state/kilroy/attractor/runs/<run_id>/`. Key files:
+
+- `final.json` — exists only when the run finished; `status` is `success` or `fail`.
+- `checkpoint.json` — last completed node, retry counts, `failure_reason` (if any).
+- `live.json` — most recent engine event (retries, errors, current node).
+- `progress.ndjson` — full event log (stage starts/ends, edge selections, LLM retries).
+- `manifest.json` — run metadata (goal, graph, repo, base SHA).
+
 ## Production Authorization Rule (Strict)
 
 NEVER start a production run except precisely as the user requested, and only after an explicit user request for that production run. Production runs are expensive.
