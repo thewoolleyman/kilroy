@@ -457,24 +457,13 @@ func catalogHasProviderModel(catalog *modeldb.LiteLLMCatalog, provider string, m
 	if catalog == nil || catalog.Models == nil {
 		return false
 	}
-	provider = normalizeProviderKey(provider)
-	modelID = strings.TrimSpace(modelID)
-	if provider == "" || modelID == "" {
-		return false
+	normalized := &modeldb.Catalog{
+		Models: make(map[string]modeldb.ModelEntry, len(catalog.Models)),
 	}
 	for id, entry := range catalog.Models {
-		if normalizeProviderKey(entry.LiteLLMProvider) != provider {
-			continue
-		}
-		key := strings.TrimSpace(id)
-		if strings.EqualFold(key, modelID) {
-			return true
-		}
-		if strings.EqualFold(providerModelIDFromCatalogKey(provider, key), modelID) {
-			return true
-		}
+		normalized.Models[id] = modeldb.ModelEntry{Provider: entry.LiteLLMProvider}
 	}
-	return false
+	return modeldb.CatalogHasProviderModel(normalized, provider, modelID)
 }
 
 func providerModelIDFromCatalogKey(provider string, id string) string {
