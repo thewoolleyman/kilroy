@@ -435,12 +435,12 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			continue
 		}
 
-		// Select next edge.
-		next, err := selectNextEdge(e.Graph, node.ID, out, e.Context)
+		// Resolve next hop with fan-in failure policy.
+		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context)
 		if err != nil {
 			return nil, err
 		}
-		if next == nil {
+		if nextHop == nil || nextHop.Edge == nil {
 			if out.Status == runtime.StatusFail {
 				failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, out.FailureReason)
 				final := runtime.FinalOutcome{
@@ -478,12 +478,14 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				Warnings:       e.warningsCopy(),
 			}, nil
 		}
+		next := nextHop.Edge
 		e.appendProgress(map[string]any{
-			"event":     "edge_selected",
-			"from_node": node.ID,
-			"to_node":   next.To,
-			"label":     next.Label(),
-			"condition": next.Condition(),
+			"event":      "edge_selected",
+			"from_node":  node.ID,
+			"to_node":    next.To,
+			"label":      next.Label(),
+			"condition":  next.Condition(),
+			"hop_source": string(nextHop.Source),
 		})
 
 		// loop_restart (attractor-spec §3.2 Step 7): terminate current run, re-launch
@@ -1097,26 +1099,6 @@ func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, 
 		}
 	}
 	return true, ""
-}
-
-func resolveRetryTarget(g *model.Graph, nodeID string) string {
-	n := g.Nodes[nodeID]
-	if n == nil {
-		return ""
-	}
-	if t := strings.TrimSpace(n.Attr("retry_target", "")); t != "" {
-		return t
-	}
-	if t := strings.TrimSpace(n.Attr("fallback_retry_target", "")); t != "" {
-		return t
-	}
-	if t := strings.TrimSpace(g.Attrs["retry_target"]); t != "" {
-		return t
-	}
-	if t := strings.TrimSpace(g.Attrs["fallback_retry_target"]); t != "" {
-		return t
-	}
-	return ""
 }
 
 func findStartNodeID(g *model.Graph) string {

@@ -312,11 +312,14 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
-	nextEdge, err := selectNextEdge(eng.Graph, lastNodeID, lastOutcome, eng.Context)
+	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context)
 	if err != nil {
 		return nil, err
 	}
-	if nextEdge == nil {
+	if nextHop == nil || nextHop.Edge == nil {
+		if lastOutcome.Status == runtime.StatusFail {
+			return nil, fmt.Errorf("resume: stage failed with no outgoing fail edge: %s", strings.TrimSpace(lastOutcome.FailureReason))
+		}
 		// Nothing to do; treat as completed.
 		return &Result{
 			RunID:          eng.Options.RunID,
@@ -334,6 +337,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			}(),
 		}, nil
 	}
+	nextEdge := nextHop.Edge
 
 	// Continue traversal from next node.
 	eng.incomingEdge = nextEdge
