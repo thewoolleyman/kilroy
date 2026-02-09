@@ -152,7 +152,7 @@ modeldb:
   openrouter_model_info_fetch_timeout_ms: 5000
 
 git:
-  require_clean: true
+  require_clean: false
   run_branch_prefix: attractor/run
   commit_per_node: true
 ```
