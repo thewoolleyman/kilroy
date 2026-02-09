@@ -13,11 +13,9 @@ import (
 	"time"
 
 	"github.com/strongdm/kilroy/internal/llm"
-	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 type Adapter struct {
-	Provider string
 	APIKey  string
 	BaseURL string
 	Client  *http.Client
@@ -41,33 +39,19 @@ func NewFromEnv() (*Adapter, error) {
 	if key == "" {
 		return nil, fmt.Errorf("ANTHROPIC_API_KEY is required")
 	}
-	return NewWithProvider("anthropic", key, os.Getenv("ANTHROPIC_BASE_URL")), nil
-}
-
-func NewWithProvider(provider, apiKey, baseURL string) *Adapter {
-	p := providerspec.CanonicalProviderKey(provider)
-	if p == "" {
-		p = "anthropic"
-	}
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	base := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL"))
 	if base == "" {
 		base = "https://api.anthropic.com"
 	}
 	return &Adapter{
-		Provider: p,
-		APIKey:   strings.TrimSpace(apiKey),
-		BaseURL:  base,
+		APIKey:  key,
+		BaseURL: strings.TrimRight(base, "/"),
 		// Avoid short client-level timeouts; rely on request context deadlines instead.
 		Client: &http.Client{Timeout: 0},
-	}
+	}, nil
 }
 
-func (a *Adapter) Name() string {
-	if p := providerspec.CanonicalProviderKey(a.Provider); p != "" {
-		return p
-	}
-	return "anthropic"
-}
+func (a *Adapter) Name() string { return "anthropic" }
 
 func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
 	if a.Client == nil {
@@ -198,10 +182,10 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		msg := fmt.Sprintf("messages.create failed: %s", strings.TrimSpace(string(rawBytes)))
-		return llm.Response{}, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
+		return llm.Response{}, llm.ErrorFromHTTPStatus("anthropic", resp.StatusCode, msg, raw, ra)
 	}
 
-	return fromAnthropicResponse(a.Name(), raw, req.Model), nil
+	return fromAnthropicResponse(raw, req.Model), nil
 }
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
@@ -330,7 +314,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, llm.WrapContextError(a.Name(), err)
+		return nil, llm.WrapContextError("anthropic", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
@@ -340,7 +324,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		msg := fmt.Sprintf("messages.create(stream) failed: %s", strings.TrimSpace(string(rawBytes)))
 		cancel()
-		return nil, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
+		return nil, llm.ErrorFromHTTPStatus("anthropic", resp.StatusCode, msg, raw, ra)
 	}
 
 	s := llm.NewChanStream(cancel)
@@ -628,7 +612,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 				msg := llm.Message{Role: llm.RoleAssistant, Content: parts}
 				r := llm.Response{
-					Provider: a.Name(),
+					Provider: "anthropic",
 					Model:    req.Model,
 					Message:  msg,
 					Finish:   finish,
@@ -649,7 +633,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 		if !finished {
 			if err := sctx.Err(); err != nil {
-				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError(a.Name(), err)})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError("anthropic", err)})
 			}
 		}
 	}()
@@ -932,9 +916,9 @@ func toAnthropicMessages(msgs []llm.Message) (system string, messages []map[stri
 	return strings.Join(sysParts, "\n\n"), messages, nil
 }
 
-func fromAnthropicResponse(provider string, raw map[string]any, requestedModel string) llm.Response {
+func fromAnthropicResponse(raw map[string]any, requestedModel string) llm.Response {
 	r := llm.Response{
-		Provider: provider,
+		Provider: "anthropic",
 		Model:    requestedModel,
 		Raw:      raw,
 	}

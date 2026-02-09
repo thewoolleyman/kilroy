@@ -3,8 +3,6 @@ package llm
 import (
 	"context"
 	"fmt"
-
-	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 type ProviderAdapter interface {
@@ -108,5 +106,11 @@ func (c *Client) Use(mw ...Middleware) {
 }
 
 func normalizeProviderName(name string) string {
-	return providerspec.CanonicalProviderKey(name)
+	switch name {
+	case "gemini":
+		// Kilroy uses "google" as the canonical provider key for Gemini.
+		return "google"
+	default:
+		return name
+	}
 }

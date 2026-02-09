@@ -16,11 +16,9 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/strongdm/kilroy/internal/llm"
-	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 type Adapter struct {
-	Provider string
 	APIKey  string
 	BaseURL string
 	Client  *http.Client
@@ -48,33 +46,19 @@ func NewFromEnv() (*Adapter, error) {
 	if key == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY is required")
 	}
-	return NewWithProvider("google", key, os.Getenv("GEMINI_BASE_URL")), nil
-}
-
-func NewWithProvider(provider, apiKey, baseURL string) *Adapter {
-	p := providerspec.CanonicalProviderKey(provider)
-	if p == "" {
-		p = "google"
-	}
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	base := strings.TrimSpace(os.Getenv("GEMINI_BASE_URL"))
 	if base == "" {
 		base = "https://generativelanguage.googleapis.com"
 	}
 	return &Adapter{
-		Provider: p,
-		APIKey:   strings.TrimSpace(apiKey),
-		BaseURL:  base,
+		APIKey:  key,
+		BaseURL: strings.TrimRight(base, "/"),
 		// Avoid short client-level timeouts; rely on request context deadlines instead.
 		Client: &http.Client{Timeout: 0},
-	}
+	}, nil
 }
 
-func (a *Adapter) Name() string {
-	if p := providerspec.CanonicalProviderKey(a.Provider); p != "" {
-		return p
-	}
-	return "google"
-}
+func (a *Adapter) Name() string { return "google" }
 
 func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
 	if a.Client == nil {
@@ -197,10 +181,10 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		msg := fmt.Sprintf("generateContent failed: %s", strings.TrimSpace(string(rawBytes)))
-		return llm.Response{}, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
+		return llm.Response{}, llm.ErrorFromHTTPStatus("google", resp.StatusCode, msg, raw, ra)
 	}
 
-	return fromGeminiResponse(a.Name(), raw, req.Model), nil
+	return fromGeminiResponse(raw, req.Model), nil
 }
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
@@ -321,7 +305,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, llm.WrapContextError(a.Name(), err)
+		return nil, llm.WrapContextError("google", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
@@ -331,7 +315,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		ra := llm.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		msg := fmt.Sprintf("streamGenerateContent failed: %s", strings.TrimSpace(string(rawBytes)))
 		cancel()
-		return nil, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
+		return nil, llm.ErrorFromHTTPStatus("google", resp.StatusCode, msg, raw, ra)
 	}
 
 	s := llm.NewChanStream(cancel)
@@ -430,7 +414,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 						flushTextPart()
 						msg := llm.Message{Role: llm.RoleAssistant, Content: contentParts}
 						r := llm.Response{
-							Provider: a.Name(),
+							Provider: "google",
 							Model:    req.Model,
 							Message:  msg,
 							Finish:   finish,
@@ -463,7 +447,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 		if !finished {
 			if err := sctx.Err(); err != nil {
-				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError(a.Name(), err)})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError("google", err)})
 			}
 		}
 	}()
@@ -760,9 +744,9 @@ func normalizeJSONNumbers(v any) any {
 	}
 }
 
-func fromGeminiResponse(provider string, raw map[string]any, requestedModel string) llm.Response {
+func fromGeminiResponse(raw map[string]any, requestedModel string) llm.Response {
 	r := llm.Response{
-		Provider: provider,
+		Provider: "google",
 		Model:    requestedModel,
 		Raw:      raw,
 	}

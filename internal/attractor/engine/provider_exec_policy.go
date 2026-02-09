@@ -5,8 +5,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 const (
@@ -115,55 +113,14 @@ func configuredProviderPathOverrides() []string {
 }
 
 func providerDefaultExecutable(provider string) (exe string, envKey string, ok bool) {
-	spec := defaultCLISpecForProvider(provider)
-	if spec == nil {
-		return "", "", false
-	}
-	return strings.TrimSpace(spec.DefaultExecutable), providerPathOverrideEnvKey(provider), true
-}
-
-func defaultCLISpecForProvider(provider string) *providerspec.CLISpec {
-	key := normalizeProviderKey(provider)
-	if key == "" {
-		return nil
-	}
-	builtin, ok := providerspec.Builtin(key)
-	if !ok || builtin.CLI == nil {
-		return nil
-	}
-	return cloneCLISpec(builtin.CLI)
-}
-
-func providerPathOverrideEnvKey(provider string) string {
 	switch normalizeProviderKey(provider) {
 	case "openai":
-		return "KILROY_CODEX_PATH"
+		return "codex", "KILROY_CODEX_PATH", true
 	case "anthropic":
-		return "KILROY_CLAUDE_PATH"
+		return "claude", "KILROY_CLAUDE_PATH", true
 	case "google":
-		return "KILROY_GEMINI_PATH"
+		return "gemini", "KILROY_GEMINI_PATH", true
 	default:
-		return ""
+		return "", "", false
 	}
-}
-
-func materializeCLIInvocation(spec providerspec.CLISpec, modelID, worktree, prompt string) (string, []string) {
-	exe := strings.TrimSpace(spec.DefaultExecutable)
-	args := make([]string, 0, len(spec.InvocationTemplate))
-	for _, token := range spec.InvocationTemplate {
-		repl := token
-		switch token {
-		case "{{model}}":
-			repl = modelID
-		case "{{worktree}}":
-			repl = worktree
-		case "{{prompt}}":
-			repl = prompt
-		}
-		if repl == "" && (token == "{{prompt}}" || token == "{{model}}" || token == "{{worktree}}") {
-			continue
-		}
-		args = append(args, repl)
-	}
-	return exe, args
 }

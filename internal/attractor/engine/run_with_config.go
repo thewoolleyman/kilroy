@@ -41,13 +41,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		}
 		usedProviders[normalizeProviderKey(p)] = true
 	}
-	runtimes, err := resolveProviderRuntimes(cfg)
-	if err != nil {
-		return nil, err
-	}
 	for p := range usedProviders {
-		rt, ok := runtimes[p]
-		if !ok || (rt.Backend != BackendAPI && rt.Backend != BackendCLI) {
+		if !hasProviderBackend(cfg, p) {
 			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)", p)
 		}
 	}
@@ -108,7 +103,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
-	if err := validateProviderModelPairs(g, runtimes, catalog, opts); err != nil {
+	if err := validateProviderModelPairs(g, cfg, catalog, opts); err != nil {
 		report := &providerPreflightReport{
 			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 			CLIProfile:          normalizedCLIProfile(cfg),
@@ -124,7 +119,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		_ = writePreflightReport(opts.LogsRoot, report)
 		return nil, err
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts); err != nil {
+	if _, err := runProviderCLIPreflight(ctx, g, cfg, opts); err != nil {
 		return nil, err
 	}
 
@@ -157,7 +152,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng := newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
 	eng.Context = NewContextWithGraphAttrs(g)
-	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
+	eng.CodergenBackend = NewCodergenRouter(cfg, catalog)
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = catalog.SHA256
 	eng.ModelCatalogSource = resolved.Source
@@ -200,8 +195,8 @@ func backendFor(cfg *RunConfigFile, provider string) BackendKind {
 	return ""
 }
 
-func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) error {
-	if g == nil || catalog == nil {
+func validateProviderModelPairs(g *model.Graph, cfg *RunConfigFile, catalog *modeldb.Catalog, opts RunOptions) error {
+	if g == nil || cfg == nil || catalog == nil {
 		return nil
 	}
 	for _, n := range g.Nodes {
@@ -213,11 +208,7 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 		if provider == "" || modelID == "" {
 			continue
 		}
-		rt, ok := runtimes[provider]
-		if !ok {
-			return fmt.Errorf("preflight: provider %s missing runtime definition", provider)
-		}
-		backend := rt.Backend
+		backend := backendFor(cfg, provider)
 		if backend != BackendCLI && backend != BackendAPI {
 			continue
 		}

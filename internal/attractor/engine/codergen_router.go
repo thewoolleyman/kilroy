@@ -29,40 +29,13 @@ type CodergenRouter struct {
 	cfg     *RunConfigFile
 	catalog *modeldb.Catalog
 
-	providerRuntimes map[string]ProviderRuntime
-	apiClientFactory func(map[string]ProviderRuntime) (*llm.Client, error)
-
 	apiOnce   sync.Once
 	apiClient *llm.Client
 	apiErr    error
 }
 
 func NewCodergenRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *CodergenRouter {
-	return NewCodergenRouterWithRuntimes(cfg, catalog, nil)
-}
-
-func NewCodergenRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.Catalog, runtimes map[string]ProviderRuntime) *CodergenRouter {
-	return &CodergenRouter{
-		cfg:              cfg,
-		catalog:          catalog,
-		providerRuntimes: cloneProviderRuntimeMap(runtimes),
-		apiClientFactory: newAPIClientFromProviderRuntimes,
-	}
-}
-
-func cloneProviderRuntimeMap(in map[string]ProviderRuntime) map[string]ProviderRuntime {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]ProviderRuntime, len(in))
-	for key, runtime := range in {
-		cp := runtime
-		cp.Failover = append([]string{}, runtime.Failover...)
-		cp.APIHeadersMap = cloneStringMap(runtime.APIHeadersMap)
-		cp.CLI = cloneCLISpec(runtime.CLI)
-		out[key] = cp
-	}
-	return out
+	return &CodergenRouter{cfg: cfg, catalog: catalog}
 }
 
 func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
@@ -104,18 +77,11 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 }
 
 func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
-	key := normalizeProviderKey(provider)
-	if key == "" {
-		return ""
-	}
-	if rt, ok := r.providerRuntimes[key]; ok {
-		return rt.Backend
-	}
 	if r.cfg == nil {
 		return ""
 	}
 	for k, v := range r.cfg.LLM.Providers {
-		if normalizeProviderKey(k) != key {
+		if normalizeProviderKey(k) != strings.ToLower(strings.TrimSpace(provider)) {
 			continue
 		}
 		return v.Backend
@@ -123,26 +89,15 @@ func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
 	return ""
 }
 
-func (r *CodergenRouter) ensureAPIClient() (*llm.Client, error) {
+func (r *CodergenRouter) api() (*llm.Client, error) {
 	r.apiOnce.Do(func() {
-		if len(r.providerRuntimes) > 0 && r.apiClientFactory != nil {
-			client, err := r.apiClientFactory(r.providerRuntimes)
-			if err != nil {
-				r.apiErr = err
-				return
-			}
-			if len(client.ProviderNames()) > 0 {
-				r.apiClient = client
-				return
-			}
-		}
 		r.apiClient, r.apiErr = llmclient.NewFromEnv()
 	})
 	return r.apiClient, r.apiErr
 }
 
 func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
-	client, err := r.ensureAPIClient()
+	client, err := r.api()
 	if err != nil {
 		return "", nil, err
 	}
@@ -199,12 +154,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 	case "agent_loop":
 		env := agent.NewLocalExecutionEnvironment(execCtx.WorktreeDir)
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
-			var profile agent.ProviderProfile
-			if rt, ok := r.providerRuntimes[normalizeProviderKey(prov)]; ok {
-				profile, err = profileForRuntimeProvider(rt, mid)
-			} else {
-				profile, err = profileForProvider(prov, mid)
-			}
+			profile, err := profileForProvider(prov, mid)
 			if err != nil {
 				return "", err
 			}
@@ -317,11 +267,7 @@ func (r *CodergenRouter) withFailoverText(
 	}
 
 	cands := []providerModel{{Provider: primaryProvider, Model: primaryModel}}
-	order := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
-	if len(order) == 0 {
-		order = failoverOrder(primaryProvider)
-	}
-	for _, p := range order {
+	for _, p := range failoverOrder(primaryProvider) {
 		p = normalizeProviderKey(p)
 		if p == "" || p == primaryProvider {
 			continue
@@ -336,7 +282,7 @@ func (r *CodergenRouter) withFailoverText(
 		if forcedModel, forced := forceModel(p); forced {
 			m = forcedModel
 		} else {
-			m = pickFailoverModelFromRuntime(p, r.providerRuntimes, r.catalog, primaryModel)
+			m = pickFailoverModel(p, r.catalog)
 		}
 		if strings.TrimSpace(m) == "" {
 			continue
@@ -443,18 +389,6 @@ func shouldFailoverLLMError(err error) bool {
 	return true
 }
 
-func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntime) []string {
-	primary = normalizeProviderKey(primary)
-	if primary == "" || len(runtimes) == 0 {
-		return nil
-	}
-	rt, ok := runtimes[primary]
-	if !ok || len(rt.Failover) == 0 {
-		return nil
-	}
-	return append([]string{}, rt.Failover...)
-}
-
 func failoverOrder(primary string) []string {
 	switch normalizeProviderKey(primary) {
 	case "openai":
@@ -466,21 +400,6 @@ func failoverOrder(primary string) []string {
 	default:
 		return []string{"openai", "anthropic", "google"}
 	}
-}
-
-func pickFailoverModelFromRuntime(provider string, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, fallbackModel string) string {
-	provider = normalizeProviderKey(provider)
-	if provider == "" {
-		return strings.TrimSpace(fallbackModel)
-	}
-	if model := strings.TrimSpace(pickFailoverModel(provider, catalog)); model != "" {
-		return model
-	}
-	ids := modelIDsForProvider(catalog, provider)
-	if len(ids) > 0 {
-		return providerModelIDFromCatalogKey(provider, ids[0])
-	}
-	return strings.TrimSpace(fallbackModel)
 }
 
 func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
@@ -683,14 +602,6 @@ func compareIntSlices(a []int, b []int) int {
 	return 1
 }
 
-func profileForRuntimeProvider(rt ProviderRuntime, model string) (agent.ProviderProfile, error) {
-	family := strings.TrimSpace(rt.ProfileFamily)
-	if family == "" {
-		family = rt.Key
-	}
-	return agent.NewProfileForFamily(family, model)
-}
-
 func profileForProvider(provider string, modelID string) (agent.ProviderProfile, error) {
 	switch normalizeProviderKey(provider) {
 	case "openai":
@@ -733,7 +644,6 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 
-	spec := defaultCLISpecForProvider(provider)
 	defaultExe, args := defaultCLIInvocation(provider, modelID, execCtx.WorktreeDir)
 	if defaultExe == "" {
 		return "", classifiedFailure(fmt.Errorf("no cli invocation mapping for provider %s", provider), ""), nil
@@ -782,7 +692,8 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	actualArgs := args
 	recordedArgs := args
 	promptMode := "stdin"
-	if spec != nil && strings.EqualFold(strings.TrimSpace(spec.PromptMode), "arg") {
+	switch normalizeProviderKey(provider) {
+	case "anthropic", "google":
 		promptMode = "arg"
 		actualArgs = insertPromptArg(args, prompt)
 		recordedArgs = insertPromptArg(args, "<prompt>")
@@ -1391,11 +1302,20 @@ func usesCodexCLISemantics(providerKey string, exe string) bool {
 }
 
 func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (exe string, args []string) {
-	spec := defaultCLISpecForProvider(provider)
-	if spec == nil {
+	switch normalizeProviderKey(provider) {
+	case "openai":
+		exe = "codex"
+		args = []string{"exec", "--json", "--sandbox", "workspace-write", "-m", modelID, "-C", worktreeDir}
+	case "anthropic":
+		exe = "claude"
+		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--model", modelID}
+	case "google":
+		exe = "gemini"
+		// Metaspec: CLI adapters must be non-interactive. Gemini CLI supports this via --yolo / --approval-mode.
+		args = []string{"-p", "--output-format", "stream-json", "--yolo", "--model", modelID}
+	default:
 		return "", nil
 	}
-	exe, args = materializeCLIInvocation(*spec, modelID, worktreeDir, "")
 	return exe, args
 }
 
