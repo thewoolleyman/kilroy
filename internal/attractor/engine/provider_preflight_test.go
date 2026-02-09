@@ -243,6 +243,51 @@ func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) 
 	}
 }
 
+func TestRunWithConfig_AllowsKimiAndZai_WhenCatalogUsesOpenRouterPrefixes(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "moonshotai/kimi-k2.5"},
+    {"id": "z-ai/glm-4.7"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"kimi": BackendAPI,
+		"zai":  BackendAPI,
+	})
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  a [shape=box, llm_provider="kimi", llm_model="kimi-k2.5", prompt="x"]
+  b [shape=box, llm_provider="zai", llm_model="glm-4.7", prompt="x"]
+  exit [shape=Msquare]
+  start -> a -> b -> exit
+}
+`)
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:         "preflight-openrouter-prefix",
+		LogsRoot:      logsRoot,
+		AllowTestShim: true,
+	})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+	report := mustReadPreflightReport(t, logsRoot)
+	if report.Summary.Fail != 0 {
+		t.Fatalf("expected preflight pass summary, got %+v", report.Summary)
+	}
+}
+
 func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
