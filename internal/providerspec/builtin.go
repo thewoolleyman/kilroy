@@ -41,7 +41,7 @@ var builtinSpecs = map[string]Spec{
 	},
 	"google": {
 		Key:     "google",
-		Aliases: []string{"gemini"},
+		Aliases: []string{"gemini", "google_ai_studio"},
 		API: &APISpec{
 			Protocol:           ProtocolGoogleGenerateContent,
 			DefaultBaseURL:     "https://generativelanguage.googleapis.com",
@@ -62,7 +62,7 @@ var builtinSpecs = map[string]Spec{
 	},
 	"kimi": {
 		Key:     "kimi",
-		Aliases: []string{"moonshot"},
+		Aliases: []string{"moonshot", "moonshotai"},
 		API: &APISpec{
 			Protocol:           ProtocolOpenAIChatCompletions,
 			DefaultBaseURL:     "https://api.moonshot.ai",

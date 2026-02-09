@@ -3,16 +3,12 @@ package modelmeta
 import (
 	"strconv"
 	"strings"
+
+	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 func NormalizeProvider(p string) string {
-	p = strings.ToLower(strings.TrimSpace(p))
-	switch p {
-	case "gemini", "google_ai_studio", "google":
-		return "google"
-	default:
-		return p
-	}
+	return providerspec.CanonicalProviderKey(p)
 }
 
 func ProviderFromModelID(id string) string {

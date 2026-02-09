@@ -21,6 +21,12 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 	if got := CanonicalProviderKey("moonshot"); got != "kimi" {
 		t.Fatalf("moonshot alias: got %q want %q", got, "kimi")
 	}
+	if got := CanonicalProviderKey("moonshotai"); got != "kimi" {
+		t.Fatalf("moonshotai alias: got %q want %q", got, "kimi")
+	}
+	if got := CanonicalProviderKey("google_ai_studio"); got != "google" {
+		t.Fatalf("google_ai_studio alias: got %q want %q", got, "google")
+	}
 	if got := CanonicalProviderKey("glm"); got != "glm" {
 		t.Fatalf("unknown provider keys should pass through unchanged, got %q", got)
 	}
