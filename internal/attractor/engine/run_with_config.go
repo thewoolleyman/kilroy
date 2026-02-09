@@ -82,6 +82,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 			AllowTestShim:       opts.AllowTestShim,
 			StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
 			CapabilityProbeMode: capabilityProbeMode(),
+			PromptProbeMode:     promptProbeMode(cfg),
 		}
 		report.addCheck(providerPreflightCheck{
 			Name:    "provider_executable_policy",
@@ -115,6 +116,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 			AllowTestShim:       opts.AllowTestShim,
 			StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
 			CapabilityProbeMode: capabilityProbeMode(),
+			PromptProbeMode:     promptProbeMode(cfg),
 		}
 		report.addCheck(providerPreflightCheck{
 			Name:    "provider_model_catalog",

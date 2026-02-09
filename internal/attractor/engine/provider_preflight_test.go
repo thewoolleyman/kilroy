@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -139,6 +143,8 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 }
 
 func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
@@ -511,6 +517,199 @@ func TestPreflightReport_IncludesCLIProfileAndSource(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing provider_cli_presence check for google")
+	}
+}
+
+func TestRunWithConfig_PreflightPromptProbe_UsesOnlyAPIProvidersInGraph(t *testing.T) {
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2"},
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
+}`)
+
+	var openaiCalls atomic.Int32
+	var sawPrompt atomic.Bool
+	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		openaiCalls.Add(1)
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		if strings.Contains(string(b), preflightPromptProbeText) {
+			sawPrompt.Store(true)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "resp_preflight",
+  "model": "gpt-5.2",
+  "output": [{"type": "message", "content": [{"type":"output_text", "text":"OK"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+}`))
+	}))
+	t.Cleanup(openaiSrv.Close)
+
+	t.Setenv("OPENAI_API_KEY", "k-test")
+	t.Setenv("OPENAI_BASE_URL", openaiSrv.URL)
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:1"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:1"
+	cfg.LLM.CLIProfile = "real"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai":    {Backend: BackendAPI},
+		"anthropic": {Backend: BackendAPI},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = catalog
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	dot := singleProviderDot("openai", "gpt-5.2")
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-api-used-only", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+	if got := openaiCalls.Load(); got == 0 {
+		t.Fatalf("expected openai preflight probe request, got %d", got)
+	}
+	if !sawPrompt.Load() {
+		t.Fatalf("expected preflight probe request body to include probe prompt")
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	foundOpenAIProbe := false
+	for _, check := range report.Checks {
+		if check.Provider == "anthropic" {
+			t.Fatalf("unexpected anthropic preflight check for unused provider: %+v", check)
+		}
+		if check.Name == "provider_prompt_probe" && check.Provider == "openai" && check.Status == "pass" {
+			foundOpenAIProbe = true
+		}
+	}
+	if !foundOpenAIProbe {
+		t.Fatalf("missing successful provider_prompt_probe check for openai")
+	}
+}
+
+func TestRunWithConfig_PreflightPromptProbe_CLIArgMode(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "on")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
+}`)
+
+	promptSeen := filepath.Join(t.TempDir(), "prompt-arg-seen")
+	claudeCLI := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--help" ]]; then
+cat <<'EOF'
+Usage: claude -p --output-format stream-json --verbose --model MODEL
+EOF
+exit 0
+fi
+found=0
+for arg in "$@"; do
+  if [[ "$arg" == %q ]]; then
+    found=1
+    break
+  fi
+done
+if [[ "$found" != "1" ]]; then
+  echo "missing prompt probe arg" >&2
+  exit 7
+fi
+echo "seen" > %q
+echo "ok"
+`, preflightPromptProbeText, promptSeen)
+	if err := os.WriteFile(claudeCLI, []byte(script), 0o755); err != nil {
+		t.Fatalf("write claude fake cli: %v", err)
+	}
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"anthropic": BackendCLI,
+	})
+	cfg.LLM.Providers["anthropic"] = ProviderConfig{Backend: BackendCLI, Executable: claudeCLI}
+	dot := singleProviderDot("anthropic", "claude-sonnet-4-20250514")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-cli-arg", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+	if _, statErr := os.Stat(promptSeen); statErr != nil {
+		t.Fatalf("expected cli arg prompt probe marker %s: %v", promptSeen, statErr)
+	}
+}
+
+func TestRunWithConfig_PreflightPromptProbe_CLIStdinMode(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "on")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2"}
+  ]
+}`)
+
+	promptSeen := filepath.Join(t.TempDir(), "prompt-stdin-seen")
+	codexCLI := filepath.Join(t.TempDir(), "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+cat <<'EOF'
+Usage: codex exec --json --sandbox workspace-write
+EOF
+exit 0
+fi
+prompt="$(cat)"
+if [[ "$prompt" != %q ]]; then
+  echo "missing prompt probe stdin" >&2
+  exit 8
+fi
+echo "seen" > %q
+echo "ok"
+`, preflightPromptProbeText, promptSeen)
+	if err := os.WriteFile(codexCLI, []byte(script), 0o755); err != nil {
+		t.Fatalf("write codex fake cli: %v", err)
+	}
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendCLI,
+	})
+	cfg.LLM.Providers["openai"] = ProviderConfig{Backend: BackendCLI, Executable: codexCLI}
+	dot := singleProviderDot("openai", "gpt-5.2")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-cli-stdin", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+	if _, statErr := os.Stat(promptSeen); statErr != nil {
+		t.Fatalf("expected cli stdin prompt probe marker %s: %v", promptSeen, statErr)
 	}
 }
 
