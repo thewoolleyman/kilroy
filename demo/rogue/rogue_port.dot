@@ -11,7 +11,7 @@ digraph rogue_wasm_port {
             * { llm_model: gpt-5.2-codex; llm_provider: openai; }
             .hard { llm_model: gpt-5.2-codex; llm_provider: openai; }
             .verify { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
-            .review { llm_model: claude-opus-4.6; llm_provider: anthropic; reasoning_effort: high; }
+            .review { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
         "
     ]
 
@@ -131,8 +131,8 @@ digraph rogue_wasm_port {
         class="hard",
         max_agent_turns=25,
         max_retries=2,
-        llm_model="claude-opus-4.6",
-        llm_provider="anthropic",
+        llm_model="gpt-5.2-codex",
+        llm_provider="openai",
         prompt="Goal: $goal\n\nYou are porting the combat and item systems from C to Rust.\n\nRead these C source files carefully:\n- demo/rogue/original-rogue/fight.c (combat mechanics, attack/defense rolls)\n- demo/rogue/original-rogue/weapons.c (weapon types, damage strings, missile)\n- demo/rogue/original-rogue/armor.c (armor types, rust, protection)\n- demo/rogue/original-rogue/potions.c (14 potion types and effects)\n- demo/rogue/original-rogue/scrolls.c (18 scroll types and effects)\n- demo/rogue/original-rogue/rings.c (14 ring types and effects)\n- demo/rogue/original-rogue/sticks.c (14 wand/staff types and effects, bolt bouncing)\n- demo/rogue/original-rogue/things.c (item generation, naming, identification, inventory display)\n- demo/rogue/original-rogue/rogue.h (all type constants, flag bits)\n\nRead the Rust project:\n- demo/rogue/rogue-wasm/src/types.rs (Rust types)\n- demo/rogue/rogue-wasm/src/game.rs (GameState)\n- demo/rogue/rogue-wasm/.ai/rogue_architecture.md\n\nImplement:\n\n**demo/rogue/rogue-wasm/src/combat.rs:**\n- fight() — melee combat resolution\n- attack() — player attacks monster\n- hit_monster() — resolve hit on monster at position\n- swing() — to-hit roll calculation\n- roll_em() — damage roll with dice parsing (\"2d6+3\" style from s_dmg strings)\n- hit() / miss() — combat message formatting\n- bounce() — bolt/wand projectile bouncing off walls\n- fire_bolt() — fire a bolt in a direction\n- killed() — handle monster death, XP, drops\n- thunk() — thrown weapon messages\n- save_throw() — saving throw calculation\n- is_magic() — check if item is magical\n- check_level() — check for player level-up\n- raise_level() — actually level up\n\n**demo/rogue/rogue-wasm/src/items.rs:**\n- new_thing() — generate random item with probability tables\n- pick_one() — weighted random selection from obj_info table\n- inv_name() — format item name for inventory display\n- money() — create gold pile\n- set_know() / set_order() — knowledge tracking\n- nameit() / choose_str() / nullstr() / vowelstr() — name formatting helpers\n- pick_color() — random potion color selection\n- charge_str() / ring_num() / num() — stat formatting\n- do_pot() — apply potion effect (all 14 types)\n- quaff() — drink a potion\n- read_scroll() — read a scroll (all 18 types)\n- ring_on() / ring_off() / ring_eat() — ring management\n- do_zap() / fix_stick() — wand/staff usage\n- missile() / do_motion() — thrown weapon physics\n- drop() / dropcheck() — drop item, cursed check\n- eat() — eat food\n- wear() / take_off() — armor management\n- wield() — weapon management\n- current() — describe current equipment\n- whatis() / identify() / call() / call_it() — identification system\n- init_weapon() — initialize weapon stats\n- fall() — item falls to floor\n- add_pack() / pack_room() / leave_pack() / inventory() — pack management\n- pick_up() — pick up item from floor\n\nAll static data tables (pot_info, scr_info, ring_info, ws_info, weap_info, arm_info, things) must be ported exactly with original probability weights and names.\n\nThe port must be EXACT — same damage dice, same probability tables, same effect logic.\n\nRun: cd demo/rogue/rogue-wasm && cargo build --lib 2>&1\n\nWrite implementation log to .ai/port_combat_items.md.\nWrite status.json: outcome=success if compiles, outcome=fail with errors."
     ]
 
@@ -140,8 +140,8 @@ digraph rogue_wasm_port {
         shape=box,
         class="verify",
         max_agent_turns=8,
-        llm_model="claude-opus-4.6",
-        llm_provider="anthropic",
+        llm_model="gpt-5.2-codex",
+        llm_provider="openai",
         prompt="Verify combat and items port.\n\nRun: cd demo/rogue/rogue-wasm && cargo build --lib 2>&1\n\nCompare against C source:\n1. Confirm fight()/attack()/swing()/roll_em() match fight.c exactly\n2. Confirm all 14 potion effects match potions.c\n3. Confirm all 18 scroll effects match scrolls.c\n4. Confirm ring/stick handling matches rings.c and sticks.c\n5. Confirm probability tables match things.c\n6. Confirm weapon damage strings match weapons.c\n7. Confirm armor AC values match armor.c\n\nWrite results to .ai/verify_combat_items.md.\nWrite status.json: outcome=success if compiles and faithful, outcome=fail with discrepancies."
     ]
 
