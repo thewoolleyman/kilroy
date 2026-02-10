@@ -5,6 +5,8 @@ digraph rogue_fast {
         default_max_retry=3,
         retry_target="impl_integration",
         fallback_retry_target="impl_scaffold",
+        default_command_timeout_ms=60000,
+        max_command_timeout_ms=600000,
         model_stylesheet="
             * { llm_model: kimi-k2.5; llm_provider: kimi; }
             .hard { llm_model: kimi-k2.5; llm_provider: kimi; }
@@ -15,6 +17,11 @@ digraph rogue_fast {
 
     start [shape=Mdiamond, label="Start"]
     exit  [shape=Msquare, label="Exit"]
+    check_toolchain [
+        shape=parallelogram,
+        max_retries=0,
+        tool_command="bash -lc 'set -euo pipefail; command -v cargo >/dev/null || { echo \"missing required tool: cargo\" >&2; exit 1; }; command -v wasm-pack >/dev/null || { echo \"missing required tool: wasm-pack (install with: cargo install wasm-pack)\" >&2; exit 1; }'"
+    ]
 
     // =========================================================================
     // Phase 1: Spec expansion — bootstrap .ai/spec.md
@@ -250,21 +257,22 @@ digraph rogue_fast {
     // =========================================================================
 
     // Spec + Analysis
-    start -> expand_spec
+    start -> check_toolchain
+    check_toolchain -> expand_spec          [condition="outcome=success"]
     expand_spec -> impl_analysis
     impl_analysis -> verify_analysis -> check_analysis
     check_analysis -> impl_architecture     [condition="outcome=success"]
-    check_analysis -> impl_analysis         [condition="outcome=fail", label="retry"]
+    check_analysis -> impl_analysis         [condition="outcome=fail", label="retry", loop_restart=true]
 
     // Architecture
     impl_architecture -> verify_architecture -> check_architecture
     check_architecture -> impl_scaffold     [condition="outcome=success"]
-    check_architecture -> impl_architecture [condition="outcome=fail", label="retry"]
+    check_architecture -> impl_architecture [condition="outcome=fail", label="retry", loop_restart=true]
 
     // Scaffold
     impl_scaffold -> verify_scaffold -> check_scaffold
     check_scaffold -> fanout                [condition="outcome=success"]
-    check_scaffold -> impl_scaffold         [condition="outcome=fail", label="retry"]
+    check_scaffold -> impl_scaffold         [condition="outcome=fail", label="retry", loop_restart=true]
 
     // Fanout -> 4 parallel branches
     fanout -> impl_dungeon
@@ -296,15 +304,15 @@ digraph rogue_fast {
     fanin -> impl_integration
     impl_integration -> verify_integration -> check_integration
     check_integration -> impl_qa            [condition="outcome=success"]
-    check_integration -> impl_integration   [condition="outcome=fail", label="retry"]
+    check_integration -> impl_integration   [condition="outcome=fail", label="retry", loop_restart=true]
 
     // QA
     impl_qa -> verify_qa -> check_qa
     check_qa -> review                      [condition="outcome=success"]
-    check_qa -> impl_qa                     [condition="outcome=fail", label="retry"]
+    check_qa -> impl_qa                     [condition="outcome=fail", label="retry", loop_restart=true]
 
     // Final review
     review -> check_review
     check_review -> exit                    [condition="outcome=success"]
-    check_review -> impl_integration        [condition="outcome=fail", label="fix"]
+    check_review -> impl_integration        [condition="outcome=fail", label="fix", loop_restart=true]
 }

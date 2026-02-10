@@ -256,6 +256,80 @@ func TestSession_MalformedToolArgs_StillPairsToolResultsByCallID(t *testing.T) {
 	}
 }
 
+func TestSession_RepeatedMalformedToolCalls_FailsFast(t *testing.T) {
+	dir := t.TempDir()
+	c := llm.NewClient()
+
+	f := &fakeAdapter{
+		name: "openai",
+		steps: []func(req llm.Request) llm.Response{
+			func(req llm.Request) llm.Response {
+				return llm.Response{
+					Message: llm.Message{
+						Role: llm.RoleAssistant,
+						Content: []llm.ContentPart{
+							{
+								Kind: llm.ContentToolCall,
+								ToolCall: &llm.ToolCallData{
+									ID:        "glob:1",
+									Name:      "glob",
+									Arguments: json.RawMessage(`{"pattern":"*.c"}{"path":"demo/rogue/original-rogue"}`),
+								},
+							},
+						},
+					},
+				}
+			},
+			func(req llm.Request) llm.Response {
+				return llm.Response{
+					Message: llm.Message{
+						Role: llm.RoleAssistant,
+						Content: []llm.ContentPart{
+							{
+								Kind: llm.ContentToolCall,
+								ToolCall: &llm.ToolCallData{
+									ID:        "glob:2",
+									Name:      "glob",
+									Arguments: json.RawMessage(`{"pattern":"*.c"}{"path":"demo/rogue/original-rogue"}`),
+								},
+							},
+						},
+					},
+				}
+			},
+			func(req llm.Request) llm.Response {
+				t.Fatalf("unexpected third request after malformed-loop guard; req=%+v", req)
+				return llm.Response{Message: llm.Assistant("unreachable")}
+			},
+		},
+	}
+	c.Register(f)
+
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{
+		MaxToolRoundsPerInput:          50,
+		MaxTurns:                       50,
+		RepeatedMalformedToolCallLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = sess.ProcessInput(ctx, "trigger malformed loop")
+	if err == nil || !strings.Contains(err.Error(), "repeated malformed tool calls detected") {
+		t.Fatalf("expected repeated malformed tool call error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "turn limit reached") {
+		t.Fatalf("expected malformed-loop guard before turn limit, got %v", err)
+	}
+	sess.Close()
+
+	if got := len(f.Requests()); got != 2 {
+		t.Fatalf("requests: got %d want 2", got)
+	}
+}
+
 func TestSession_MaxTurns_StopsAcrossRoundsAndEmitsEvent(t *testing.T) {
 	dir := t.TempDir()
 	c := llm.NewClient()

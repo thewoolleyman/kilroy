@@ -634,6 +634,8 @@ Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`.
 17. **Unscoped Go monorepo checks.** Do NOT make repo-wide `go build ./...`, `go vet ./...`, or `go test ./...` required by default. Scope required checks to generated project paths (e.g., `./cmd/<app>`, `./pkg/<app>/...`). Treat blocked repo-wide network checks as advisory/skipped.
 18. **Unscoped lint in verify nodes.** Do NOT use `npm run lint`, `ruff check .`, or any project-wide lint command in verify nodes. Scope lint to changed files using `git diff --name-only $base_sha`. Pre-existing errors in unrelated files cause infinite retry loops where the agent burns tokens trying to fix code it didn't write.
 19. **Overly aggressive API preflight timeouts in run config.** When producing or updating a companion run config for real-provider runs, set `preflight.prompt_probes.timeout_ms: 60000` (60s) as the baseline to reduce startup failures from transient provider latency spikes.
+20. **Missing toolchain readiness gates for non-default build dependencies.** If the deliverable needs tools that are often absent (for example `wasm-pack`, Playwright browsers, mobile SDKs), add an early `shape=parallelogram` tool node that checks prerequisites and blocks the pipeline before expensive LLM stages.
+21. **Retrying long backward edges without restart.** When a retry edge jumps back to a much earlier implementation stage, set `loop_restart=true` on that edge so each retry starts with a fresh run directory and avoids stale-context loops.
 
 ## Notes on Reference Dotfile Conventions
 

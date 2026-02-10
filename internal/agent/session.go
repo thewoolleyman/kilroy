@@ -16,11 +16,12 @@ import (
 )
 
 type SessionConfig struct {
-	MaxToolRoundsPerInput   int
-	MaxTurns                int
-	DefaultCommandTimeoutMS int
-	MaxCommandTimeoutMS     int
-	MaxSubagentDepth        int
+	MaxToolRoundsPerInput          int
+	MaxTurns                       int
+	DefaultCommandTimeoutMS        int
+	MaxCommandTimeoutMS            int
+	RepeatedMalformedToolCallLimit int
+	MaxSubagentDepth               int
 
 	// ToolOutputLimits overrides default per-tool truncation behavior.
 	ToolOutputLimits map[string]ToolOutputLimit
@@ -54,6 +55,9 @@ func (c *SessionConfig) applyDefaults() {
 	if c.MaxCommandTimeoutMS <= 0 {
 		c.MaxCommandTimeoutMS = 600_000
 	}
+	if c.RepeatedMalformedToolCallLimit <= 0 {
+		c.RepeatedMalformedToolCallLimit = 3
+	}
 	if c.MaxSubagentDepth <= 0 {
 		c.MaxSubagentDepth = 1
 	}
@@ -73,7 +77,7 @@ type Session struct {
 	profile ProviderProfile
 	env     ExecutionEnvironment
 
-	events chan SessionEvent
+	events  chan SessionEvent
 	envInfo EnvironmentInfo
 
 	mu      sync.Mutex
@@ -387,14 +391,16 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 	s.emit(EventUserInput, map[string]any{"text": input})
 	s.appendTurn(TurnUserInput, llm.User(input))
 
-		docs, _ := LoadProjectDocs(s.env, s.profile.ProjectDocFiles()...)
-		sys := s.profile.BuildSystemPrompt(s.envInfo, docs)
-		if strings.TrimSpace(s.cfg.UserInstructionOverride) != "" {
-			sys = sys + "\n\n" + strings.TrimSpace(s.cfg.UserInstructionOverride) + "\n"
-		}
+	docs, _ := LoadProjectDocs(s.env, s.profile.ProjectDocFiles()...)
+	sys := s.profile.BuildSystemPrompt(s.envInfo, docs)
+	if strings.TrimSpace(s.cfg.UserInstructionOverride) != "" {
+		sys = sys + "\n\n" + strings.TrimSpace(s.cfg.UserInstructionOverride) + "\n"
+	}
 
 	var lastToolFP string
 	repeats := 0
+	var lastMalformedToolFP string
+	malformedRepeats := 0
 	loopWarned := false
 	ctxWarned := false
 
@@ -405,25 +411,25 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			return "", ctx.Err()
 		default:
 		}
-			s.mu.Lock()
-			s.turns++
-			turns := s.turns
-			historyTurns := append([]Turn{}, s.history...)
-			s.mu.Unlock()
+		s.mu.Lock()
+		s.turns++
+		turns := s.turns
+		historyTurns := append([]Turn{}, s.history...)
+		s.mu.Unlock()
 
-			history := make([]llm.Message, 0, len(historyTurns))
-			for _, t := range historyTurns {
-				if t.Kind == TurnSteering {
-					history = append(history, llm.User(t.Message.Text()))
-					continue
-				}
-				history = append(history, t.Message)
+		history := make([]llm.Message, 0, len(historyTurns))
+		for _, t := range historyTurns {
+			if t.Kind == TurnSteering {
+				history = append(history, llm.User(t.Message.Text()))
+				continue
 			}
+			history = append(history, t.Message)
+		}
 
-			if s.cfg.MaxTurns > 0 && turns > s.cfg.MaxTurns {
-				s.emit(EventTurnLimit, map[string]any{"max_turns": s.cfg.MaxTurns})
-				return "", fmt.Errorf("%w (max_turns=%d)", ErrTurnLimit, s.cfg.MaxTurns)
-			}
+		if s.cfg.MaxTurns > 0 && turns > s.cfg.MaxTurns {
+			s.emit(EventTurnLimit, map[string]any{"max_turns": s.cfg.MaxTurns})
+			return "", fmt.Errorf("%w (max_turns=%d)", ErrTurnLimit, s.cfg.MaxTurns)
+		}
 
 		req := llm.Request{
 			Model:    s.profile.Model(),
@@ -434,29 +440,29 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		if strings.TrimSpace(s.cfg.ReasoningEffort) != "" {
 			v := strings.TrimSpace(s.cfg.ReasoningEffort)
 			req.ReasoningEffort = &v
-			}
+		}
 
-			policy := llm.DefaultRetryPolicy()
-			if s.cfg.LLMRetryPolicy != nil {
-				policy = *s.cfg.LLMRetryPolicy
+		policy := llm.DefaultRetryPolicy()
+		if s.cfg.LLMRetryPolicy != nil {
+			policy = *s.cfg.LLMRetryPolicy
+		}
+		resp, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Response, error) {
+			return s.client.Complete(ctx, req)
+		})
+		if err != nil {
+			s.emit(EventError, map[string]any{"error": err.Error()})
+			// Spec: context overflow should emit a warning (no automatic compaction).
+			var cle *llm.ContextLengthError
+			if errors.As(err, &cle) {
+				s.emit(EventWarning, map[string]any{"message": "Context length exceeded"})
 			}
-			resp, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Response, error) {
-				return s.client.Complete(ctx, req)
-			})
-			if err != nil {
-				s.emit(EventError, map[string]any{"error": err.Error()})
-				// Spec: context overflow should emit a warning (no automatic compaction).
-				var cle *llm.ContextLengthError
-				if errors.As(err, &cle) {
-					s.emit(EventWarning, map[string]any{"message": "Context length exceeded"})
-				}
-				// Spec: non-retryable/unrecoverable errors transition the session to CLOSED.
-				var le llm.Error
-				if errors.As(err, &le) && !le.Retryable() {
-					s.Close()
-				}
-				return "", err
+			// Spec: non-retryable/unrecoverable errors transition the session to CLOSED.
+			var le llm.Error
+			if errors.As(err, &le) && !le.Retryable() {
+				s.Close()
 			}
+			return "", err
+		}
 
 		// Context window awareness: emit a warning when we exceed ~80% of the profile's context window.
 		if !ctxWarned {
@@ -465,13 +471,13 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			}
 		}
 
-			txt := resp.Text()
-			s.emit(EventAssistantTextStart, map[string]any{})
-			s.appendTurn(TurnAssistant, resp.Message)
-			if strings.TrimSpace(txt) != "" {
-				s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
-			}
-			s.emit(EventAssistantTextEnd, map[string]any{"text": txt})
+		txt := resp.Text()
+		s.emit(EventAssistantTextStart, map[string]any{})
+		s.appendTurn(TurnAssistant, resp.Message)
+		if strings.TrimSpace(txt) != "" {
+			s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
+		}
+		s.emit(EventAssistantTextEnd, map[string]any{"text": txt})
 
 		calls := resp.ToolCalls()
 		if len(calls) == 0 {
@@ -487,13 +493,13 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 				lastToolFP = fp
 				repeats = 1
 			}
-				if repeats >= s.cfg.LoopDetectionWindow {
-					loopWarned = true
-					s.emit(EventLoopDetection, map[string]any{"fingerprint": fp, "repeats": repeats})
-					s.appendTurn(TurnSteering, llm.User("Loop detection: you are repeating the same tool calls. Stop and change approach."))
-					s.emit(EventSteeringInjected, map[string]any{"text": "Loop detection: you are repeating the same tool calls. Stop and change approach."})
-				}
+			if repeats >= s.cfg.LoopDetectionWindow {
+				loopWarned = true
+				s.emit(EventLoopDetection, map[string]any{"fingerprint": fp, "repeats": repeats})
+				s.appendTurn(TurnSteering, llm.User("Loop detection: you are repeating the same tool calls. Stop and change approach."))
+				s.emit(EventSteeringInjected, map[string]any{"text": "Loop detection: you are repeating the same tool calls. Stop and change approach."})
 			}
+		}
 
 		// Execute tool calls (possibly in parallel) and send results back.
 		results := make([]ToolExecResult, len(calls))
@@ -514,15 +520,38 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			}
 		}
 
-			for _, r := range results {
-				s.appendTurn(TurnTool, llm.ToolResultNamed(r.CallID, r.ToolName, r.Output, r.IsError))
+		// Guardrail: malformed tool-arguments loops are deterministic and should
+		// fail fast instead of burning large turn budgets.
+		if malformedFP := malformedToolCallsFingerprint(calls, results); malformedFP != "" {
+			if malformedFP == lastMalformedToolFP {
+				malformedRepeats++
+			} else {
+				lastMalformedToolFP = malformedFP
+				malformedRepeats = 1
 			}
+			if s.cfg.RepeatedMalformedToolCallLimit > 0 && malformedRepeats >= s.cfg.RepeatedMalformedToolCallLimit {
+				err := fmt.Errorf("repeated malformed tool calls detected (repeats=%d limit=%d)", malformedRepeats, s.cfg.RepeatedMalformedToolCallLimit)
+				s.emit(EventError, map[string]any{
+					"error":   err.Error(),
+					"repeats": malformedRepeats,
+					"limit":   s.cfg.RepeatedMalformedToolCallLimit,
+				})
+				return "", err
+			}
+		} else {
+			lastMalformedToolFP = ""
+			malformedRepeats = 0
+		}
 
-			// Inject any queued steering messages before the next model call.
-			for _, msg := range s.drainSteering() {
-				s.appendTurn(TurnSteering, llm.User(msg))
-				s.emit(EventSteeringInjected, map[string]any{"text": msg})
-			}
+		for _, r := range results {
+			s.appendTurn(TurnTool, llm.ToolResultNamed(r.CallID, r.ToolName, r.Output, r.IsError))
+		}
+
+		// Inject any queued steering messages before the next model call.
+		for _, msg := range s.drainSteering() {
+			s.appendTurn(TurnSteering, llm.User(msg))
+			s.emit(EventSteeringInjected, map[string]any{"text": msg})
+		}
 	}
 
 	return "", fmt.Errorf("max tool rounds reached")
@@ -559,6 +588,23 @@ func toolCallsFingerprint(calls []llm.ToolCallData) string {
 		b.WriteString(strings.TrimSpace(c.Name))
 		b.WriteByte(':')
 		b.WriteString(shortHash(c.Arguments))
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
+func malformedToolCallsFingerprint(calls []llm.ToolCallData, results []ToolExecResult) string {
+	if len(calls) == 0 || len(calls) != len(results) {
+		return ""
+	}
+	var b strings.Builder
+	for i := range calls {
+		if !results[i].IsError || !strings.Contains(results[i].FullOutput, "invalid tool arguments JSON") {
+			continue
+		}
+		b.WriteString(strings.TrimSpace(calls[i].Name))
+		b.WriteByte(':')
+		b.WriteString(shortHash(calls[i].Arguments))
 		b.WriteByte(';')
 	}
 	return b.String()
@@ -670,42 +716,42 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 	})
 
 	// shell
-		if err := reg.Register(RegisteredTool{
-			Definition: defShell(),
-			Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
-				cmd := fmt.Sprint(args["command"])
-				timeout := s.cfg.DefaultCommandTimeoutMS
-				if v, ok := args["timeout_ms"].(float64); ok && int(v) > 0 {
-					timeout = int(v)
-				}
-				if s.cfg.MaxCommandTimeoutMS > 0 && timeout > s.cfg.MaxCommandTimeoutMS {
-					timeout = s.cfg.MaxCommandTimeoutMS
-				}
-				res, err := env.ExecCommand(ctx, cmd, timeout, "", nil)
+	if err := reg.Register(RegisteredTool{
+		Definition: defShell(),
+		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
+			cmd := fmt.Sprint(args["command"])
+			timeout := s.cfg.DefaultCommandTimeoutMS
+			if v, ok := args["timeout_ms"].(float64); ok && int(v) > 0 {
+				timeout = int(v)
+			}
+			if s.cfg.MaxCommandTimeoutMS > 0 && timeout > s.cfg.MaxCommandTimeoutMS {
+				timeout = s.cfg.MaxCommandTimeoutMS
+			}
+			res, err := env.ExecCommand(ctx, cmd, timeout, "", nil)
 
-				// Return a line-oriented tool output so line truncation works as intended for shell output.
-				var b strings.Builder
-				if strings.TrimSpace(res.Stdout) != "" {
-					b.WriteString(res.Stdout)
-					if !strings.HasSuffix(res.Stdout, "\n") {
-						b.WriteString("\n")
-					}
+			// Return a line-oriented tool output so line truncation works as intended for shell output.
+			var b strings.Builder
+			if strings.TrimSpace(res.Stdout) != "" {
+				b.WriteString(res.Stdout)
+				if !strings.HasSuffix(res.Stdout, "\n") {
+					b.WriteString("\n")
 				}
-				if strings.TrimSpace(res.Stderr) != "" {
-					b.WriteString(res.Stderr)
-					if !strings.HasSuffix(res.Stderr, "\n") {
-						b.WriteString("\n")
-					}
+			}
+			if strings.TrimSpace(res.Stderr) != "" {
+				b.WriteString(res.Stderr)
+				if !strings.HasSuffix(res.Stderr, "\n") {
+					b.WriteString("\n")
 				}
-				if res.TimedOut {
-					b.WriteString(fmt.Sprintf("[ERROR: Command timed out after %dms. Partial output is shown above.\nYou can retry with a longer timeout by setting the timeout_ms parameter.]\n", timeout))
-				}
-				b.WriteString(fmt.Sprintf("exit_code=%d duration_ms=%d timed_out=%t\n", res.ExitCode, res.DurationMS, res.TimedOut))
-				return b.String(), err
-			},
-		}); err != nil {
-			return err
-		}
+			}
+			if res.TimedOut {
+				b.WriteString(fmt.Sprintf("[ERROR: Command timed out after %dms. Partial output is shown above.\nYou can retry with a longer timeout by setting the timeout_ms parameter.]\n", timeout))
+			}
+			b.WriteString(fmt.Sprintf("exit_code=%d duration_ms=%d timed_out=%t\n", res.ExitCode, res.DurationMS, res.TimedOut))
+			return b.String(), err
+		},
+	}); err != nil {
+		return err
+	}
 
 	// list_dir (Gemini-aligned)
 	_ = reg.Register(RegisteredTool{
@@ -743,22 +789,22 @@ func registerCoreTools(reg *ToolRegistry, s *Session) error {
 		return err
 	}
 
-		// glob
-		if err := reg.Register(RegisteredTool{
-			Definition: defGlob(),
-			Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
-				_ = ctx
-				pat := fmt.Sprint(args["pattern"])
-				path := fmt.Sprint(args["path"])
-				matches, err := env.Glob(pat, path)
-				if err != nil {
-					return "", err
-				}
-				return strings.Join(matches, "\n"), nil
-			},
-		}); err != nil {
-			return err
-		}
+	// glob
+	if err := reg.Register(RegisteredTool{
+		Definition: defGlob(),
+		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
+			_ = ctx
+			pat := fmt.Sprint(args["pattern"])
+			path := fmt.Sprint(args["path"])
+			matches, err := env.Glob(pat, path)
+			if err != nil {
+				return "", err
+			}
+			return strings.Join(matches, "\n"), nil
+		},
+	}); err != nil {
+		return err
+	}
 
 	// apply_patch (OpenAI-specific; best-effort implementation lives in this repo)
 	_ = reg.Register(RegisteredTool{
