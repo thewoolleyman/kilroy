@@ -2,10 +2,12 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/strongdm/kilroy/internal/llm"
 	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
@@ -93,5 +95,162 @@ func TestClassifyProviderCLIErrorWithContract_CapabilityMissing(t *testing.T) {
 	)
 	if got.Kind != providerCLIErrorKindCapabilityMissing {
 		t.Fatalf("Kind: got %q want %q", got.Kind, providerCLIErrorKindCapabilityMissing)
+	}
+}
+
+func TestClassifyAPIError(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantClass string
+	}{
+		// Typed LLM errors — deterministic
+		{
+			name:      "InvalidRequestError_400",
+			err:       llm.ErrorFromHTTPStatus("openai", 400, "model not found", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "AuthenticationError_401",
+			err:       llm.ErrorFromHTTPStatus("kimi", 401, "invalid api key", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "AccessDeniedError_403",
+			err:       llm.ErrorFromHTTPStatus("openai", 403, "forbidden", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "NotFoundError_404",
+			err:       llm.ErrorFromHTTPStatus("openai", 404, "resource not found", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "ContextLengthError_413",
+			err:       llm.ErrorFromHTTPStatus("anthropic", 413, "context too long", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "InvalidRequestError_422",
+			err:       llm.ErrorFromHTTPStatus("openai", 422, "unprocessable", nil, nil),
+			wantClass: failureClassDeterministic,
+		},
+		// Typed LLM errors — transient
+		{
+			name:      "RateLimitError_429",
+			err:       llm.ErrorFromHTTPStatus("kimi", 429, "rate limited", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "ServerError_500",
+			err:       llm.ErrorFromHTTPStatus("openai", 500, "internal error", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "ServerError_502",
+			err:       llm.ErrorFromHTTPStatus("openai", 502, "bad gateway", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "ServerError_503",
+			err:       llm.ErrorFromHTTPStatus("openai", 503, "service unavailable", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "RequestTimeoutError_408",
+			err:       llm.ErrorFromHTTPStatus("openai", 408, "request timeout", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "UnknownHTTPError_599",
+			err:       llm.ErrorFromHTTPStatus("openai", 599, "weird error", nil, nil),
+			wantClass: failureClassTransientInfra,
+		},
+		// SDK errors — non-HTTP
+		{
+			name:      "NetworkError_transient",
+			err:       llm.NewNetworkError("openai", "connection reset"),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "StreamError_transient",
+			err:       llm.NewStreamError("openai", "stream interrupted"),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "AbortError_deterministic",
+			err:       llm.NewAbortError("user cancelled"),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "InvalidToolCallError_deterministic",
+			err:       llm.NewInvalidToolCallError("bad tool"),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "ConfigurationError_deterministic",
+			err:       &llm.ConfigurationError{Message: "missing api key"},
+			wantClass: failureClassDeterministic,
+		},
+		// Non-LLM errors — heuristic fallback
+		{
+			name:      "plain_connection_refused",
+			err:       fmt.Errorf("dial tcp: connection refused"),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "plain_rate_limit",
+			err:       fmt.Errorf("rate limit exceeded"),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "plain_timeout",
+			err:       fmt.Errorf("context deadline exceeded"),
+			wantClass: failureClassTransientInfra,
+		},
+		{
+			name:      "plain_unknown",
+			err:       fmt.Errorf("something unknown failed"),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "nil_error",
+			err:       nil,
+			wantClass: failureClassDeterministic,
+		},
+		// Wrapped errors — errors.As unwraps through fmt.Errorf chains
+		{
+			name:      "wrapped_llm_error_400",
+			err:       fmt.Errorf("agent loop: %w", llm.ErrorFromHTTPStatus("openai", 400, "model not found", nil, nil)),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "wrapped_llm_error_429",
+			err:       fmt.Errorf("agent loop: %w", llm.ErrorFromHTTPStatus("kimi", 429, "rate limited", nil, nil)),
+			wantClass: failureClassTransientInfra,
+		},
+		// SDK errors that also occur in agent_loop path
+		{
+			name:      "NoObjectGeneratedError_deterministic",
+			err:       llm.NewNoObjectGeneratedError("no output", "raw"),
+			wantClass: failureClassDeterministic,
+		},
+		{
+			name:      "UnsupportedToolChoiceError_deterministic",
+			err:       llm.NewUnsupportedToolChoiceError("openai", "required"),
+			wantClass: failureClassDeterministic,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotClass, gotSig := classifyAPIError(tc.err)
+			if gotClass != tc.wantClass {
+				t.Fatalf("classifyAPIError(%v): class=%q want %q", tc.err, gotClass, tc.wantClass)
+			}
+			if gotSig == "" {
+				t.Fatalf("classifyAPIError(%v): signature is empty", tc.err)
+			}
+		})
 	}
 }

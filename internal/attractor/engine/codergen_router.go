@@ -435,6 +435,10 @@ func shouldFailoverLLMError(err error) bool {
 	if errors.As(err, &ire) {
 		return false
 	}
+	var nfe *llm.NotFoundError
+	if errors.As(err, &nfe) {
+		return false
+	}
 	var cle *llm.ContextLengthError
 	if errors.As(err, &cle) {
 		return false

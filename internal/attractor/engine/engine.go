@@ -731,7 +731,10 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 		}, node)
 	}()
 	if err != nil {
-		out = runtime.Outcome{Status: runtime.StatusRetry, FailureReason: err.Error()}
+		// Preserve any metadata (failure_class, failure_signature) the handler
+		// attached to the outcome. Only override Status and FailureReason.
+		out.Status = runtime.StatusRetry
+		out.FailureReason = err.Error()
 	}
 
 	// If the handler (or external tool) wrote status.json, treat it as authoritative.
@@ -821,14 +824,16 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		}
 
 		failureClass := classifyFailureClass(out)
-		hintProvided := strings.TrimSpace(readFailureClassHint(out)) != ""
 		canRetry := false
 		if attempt < maxAttempts {
-			if hintProvided {
-				canRetry = shouldRetryOutcome(out, failureClass)
-			} else {
-				// Preserve existing retry behavior for unclassified stage outcomes.
+			// Tool command nodes (shape=parallelogram) always retry when
+			// max_retries is set — the user explicitly opted in. LLM/API
+			// nodes use failure classification to gate retries.
+			isToolNode := strings.TrimSpace(node.Attr("tool_command", "")) != ""
+			if isToolNode {
 				canRetry = out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry
+			} else {
+				canRetry = shouldRetryOutcome(out, failureClass)
 			}
 		}
 		if canRetry {
@@ -845,7 +850,7 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			time.Sleep(delay)
 			continue
 		}
-		if hintProvided && attempt < maxAttempts && (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) {
+		if attempt < maxAttempts && (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) {
 			e.appendProgress(map[string]any{
 				"event":          "stage_retry_blocked",
 				"node_id":        node.ID,

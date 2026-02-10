@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 
+	"github.com/strongdm/kilroy/internal/llm"
 	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
@@ -167,4 +169,67 @@ func firstNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// classifyAPIError classifies an error from the API backend into a failure class
+// and signature. It uses the typed llm.Error interface when available and falls
+// back to string-matching heuristics (the same hints used by classifyFailureClass).
+//
+// Context errors (context.Canceled, context.DeadlineExceeded) are already
+// converted to AbortError / RequestTimeoutError by llm.WrapContextError before
+// reaching this function, so they are classified correctly through the typed path.
+func classifyAPIError(err error) (failureClass string, failureSignature string) {
+	if err == nil {
+		return failureClassDeterministic, "api_error|unknown|nil"
+	}
+
+	provider := "api"
+	detail := "unknown"
+
+	// Typed LLM errors carry structured retryability and provider info.
+	var llmErr llm.Error
+	if errors.As(err, &llmErr) {
+		if p := strings.TrimSpace(llmErr.Provider()); p != "" {
+			provider = p
+		}
+		if llmErr.Retryable() {
+			// Refine the signature category based on status code.
+			switch llmErr.StatusCode() {
+			case 429:
+				detail = "rate_limited"
+			case 408:
+				detail = "timeout"
+			case 500, 502, 503, 504:
+				detail = "server_error"
+			default:
+				detail = "transient"
+			}
+			return failureClassTransientInfra, fmt.Sprintf("api_transient|%s|%s", provider, detail)
+		}
+		// Non-retryable typed error.
+		switch llmErr.StatusCode() {
+		case 400, 422:
+			detail = "invalid_request"
+		case 401:
+			detail = "authentication"
+		case 403:
+			detail = "access_denied"
+		case 404:
+			detail = "not_found"
+		case 413:
+			detail = "context_length"
+		default:
+			detail = "deterministic"
+		}
+		return failureClassDeterministic, fmt.Sprintf("api_deterministic|%s|%s", provider, detail)
+	}
+
+	// Non-LLM errors: fall back to the same heuristic hints used by classifyFailureClass.
+	reason := strings.ToLower(strings.TrimSpace(err.Error()))
+	for _, hint := range transientInfraReasonHints {
+		if strings.Contains(reason, hint) {
+			return failureClassTransientInfra, fmt.Sprintf("api_transient|%s|heuristic", provider)
+		}
+	}
+	return failureClassDeterministic, fmt.Sprintf("api_deterministic|%s|unknown", provider)
 }

@@ -211,7 +211,13 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	}
 	resp, out, err := backend.Run(ctx, exec, node, promptText)
 	if err != nil {
-		return runtime.Outcome{Status: runtime.StatusRetry, FailureReason: err.Error()}, err
+		fc, sig := classifyAPIError(err)
+		return runtime.Outcome{
+			Status:         runtime.StatusRetry,
+			FailureReason:  err.Error(),
+			Meta:           map[string]any{"failure_class": fc, "failure_signature": sig},
+			ContextUpdates: map[string]any{"failure_class": fc},
+		}, nil
 	}
 	if strings.TrimSpace(resp) != "" {
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(resp), 0o644)
@@ -412,7 +418,10 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
-		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout)}, nil
+		return runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout),
+		}, nil
 	}
 
 	if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{

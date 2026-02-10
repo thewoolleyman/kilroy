@@ -217,3 +217,10 @@ func TestEnsureAPIClient_UsesSyncOnce(t *testing.T) {
 		t.Fatalf("api client factory called %d times; want 1", calls.Load())
 	}
 }
+
+func TestShouldFailoverLLMError_NotFoundDoesNotFailover(t *testing.T) {
+	err := llm.ErrorFromHTTPStatus("openai", 404, "model not found", nil, nil)
+	if shouldFailoverLLMError(err) {
+		t.Fatalf("404 NotFoundError should not trigger failover")
+	}
+}
