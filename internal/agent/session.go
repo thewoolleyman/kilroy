@@ -431,12 +431,9 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			Messages: append([]llm.Message{llm.System(sys)}, history...),
 			Tools:    s.profile.ToolDefinitions(),
 		}
-		// Enforce provider execution policy at request construction so Kimi coding
-		// requests always carry max_tokens>=16000 before any runtime dispatch.
-		req = llm.ApplyExecutionPolicy(req, llm.ExecutionPolicy(req.Provider))
-			if strings.TrimSpace(s.cfg.ReasoningEffort) != "" {
-				v := strings.TrimSpace(s.cfg.ReasoningEffort)
-				req.ReasoningEffort = &v
+		if strings.TrimSpace(s.cfg.ReasoningEffort) != "" {
+			v := strings.TrimSpace(s.cfg.ReasoningEffort)
+			req.ReasoningEffort = &v
 			}
 
 			policy := llm.DefaultRetryPolicy()

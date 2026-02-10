@@ -565,7 +565,7 @@ func TestAdapter_Stream_ToolUse_OneOffBehaviorMatrix(t *testing.T) {
 		},
 		{
 			name:             "start_input_empty_object_plus_delta_prefers_delta_and_is_valid",
-			sequence:         "start_input_empty_object_plus_delta_invalid_json",
+			sequence:         "start_input_empty_object_plus_delta_valid_json",
 			wantJSONValid:    true,
 			wantToolName:     "shell",
 			wantArgsContains: `{"command":"echo hi"}`,
