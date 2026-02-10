@@ -83,6 +83,17 @@ digraph T {
 	}
 }
 
+func TestReliabilityHelpers_CompileSmoke(t *testing.T) {
+	_ = runStatusIngestionFixture
+	_ = runHeartbeatFixture
+	_ = runParallelWatchdogFixture
+	_ = runCanceledSubgraphFixture
+	_ = runDeterministicSubgraphCycleFixture
+	_ = runStatusIngestionProgressFixture
+	_ = runSubgraphCycleProgressFixture
+	_ = runSubgraphCancelProgressFixture
+}
+
 func assertExists(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
