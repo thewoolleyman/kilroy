@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -921,9 +922,24 @@ EOF
 exit 0
 fi
 prompt="$(cat)"
+output_path=""
+argv=("$@")
+for ((i=0; i<${#argv[@]}; i++)); do
+  if [[ "${argv[$i]}" == "-o" || "${argv[$i]}" == "--output" ]]; then
+    if (( i + 1 < ${#argv[@]} )); then
+      output_path="${argv[$((i + 1))]}"
+    fi
+    break
+  fi
+done
 if [[ "$prompt" != %q ]]; then
   echo "missing prompt probe stdin" >&2
   exit 8
+fi
+if [[ -n "$output_path" ]]; then
+cat > "$output_path" <<'EOF'
+{"final":"OK","summary":"OK"}
+EOF
 fi
 echo "seen" > %q
 echo "ok"
@@ -950,6 +966,120 @@ echo "ok"
 	}
 	if _, statErr := os.Stat(promptSeen); statErr != nil {
 		t.Fatalf("expected cli stdin prompt probe marker %s: %v", promptSeen, statErr)
+	}
+}
+
+func TestRunWithConfig_PreflightPromptProbe_CLIUsesProductionRetryPath(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "on")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2"}
+  ]
+}`)
+
+	callCountPath := filepath.Join(t.TempDir(), "codex-call-count")
+	codexCLI := filepath.Join(t.TempDir(), "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+cat <<'EOF'
+Usage: codex exec --json --sandbox workspace-write
+EOF
+exit 0
+fi
+prompt="$(cat)"
+output_path=""
+argv=("$@")
+for ((i=0; i<${#argv[@]}; i++)); do
+  if [[ "${argv[$i]}" == "-o" || "${argv[$i]}" == "--output" ]]; then
+    if (( i + 1 < ${#argv[@]} )); then
+      output_path="${argv[$((i + 1))]}"
+    fi
+    break
+  fi
+done
+count=0
+if [[ -f %q ]]; then
+  count="$(cat %q)"
+fi
+count=$((count + 1))
+echo "$count" > %q
+if [[ "$count" == "1" ]]; then
+  echo "state db missing rollout path for thread preflight" >&2
+  exit 1
+fi
+if [[ "$prompt" != %q ]]; then
+  echo "missing prompt probe stdin" >&2
+  exit 8
+fi
+if [[ -n "$output_path" ]]; then
+cat > "$output_path" <<'EOF'
+{"final":"OK","summary":"OK"}
+EOF
+fi
+cat <<'EOF'
+{"type":"thread.started","thread_id":"t"}
+{"type":"turn.completed"}
+EOF
+`, callCountPath, callCountPath, callCountPath, preflightPromptProbeText)
+	if err := os.WriteFile(codexCLI, []byte(script), 0o755); err != nil {
+		t.Fatalf("write codex fake cli: %v", err)
+	}
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendCLI,
+	})
+	cfg.LLM.Providers["openai"] = ProviderConfig{Backend: BackendCLI, Executable: codexCLI}
+	dot := singleProviderDot("openai", "gpt-5.2")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-cli-production-retry", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+
+	gotCallsRaw, readErr := os.ReadFile(callCountPath)
+	if readErr != nil {
+		t.Fatalf("read codex call count: %v", readErr)
+	}
+	gotCalls, convErr := strconv.Atoi(strings.TrimSpace(string(gotCallsRaw)))
+	if convErr != nil {
+		t.Fatalf("parse codex call count: %v (raw=%q)", convErr, string(gotCallsRaw))
+	}
+	if got := gotCalls; got < 2 {
+		t.Fatalf("expected prompt probe to retry through production path; codex calls=%d want >=2", got)
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	sawPromptProbePass := false
+	for _, check := range report.Checks {
+		if check.Name == "provider_prompt_probe" && check.Provider == "openai" && check.Status == "pass" {
+			sawPromptProbePass = true
+			break
+		}
+	}
+	if !sawPromptProbePass {
+		t.Fatalf("expected provider_prompt_probe pass check for openai")
+	}
+
+	invPath := filepath.Join(logsRoot, "preflight", "prompt-probe", "openai", "gpt-5.2", "cli", "cli_invocation.json")
+	invRaw, readErr := os.ReadFile(invPath)
+	if readErr != nil {
+		t.Fatalf("read cli_invocation artifact %s: %v", invPath, readErr)
+	}
+	var inv map[string]any
+	if err := json.Unmarshal(invRaw, &inv); err != nil {
+		t.Fatalf("decode cli_invocation artifact: %v", err)
+	}
+	if got, _ := inv["state_db_fallback_retry"].(bool); !got {
+		t.Fatalf("expected cli_invocation.state_db_fallback_retry=true, got %#v", inv["state_db_fallback_retry"])
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/strongdm/kilroy/internal/attractor/model"
 	"github.com/strongdm/kilroy/internal/attractor/modeldb"
+	"github.com/strongdm/kilroy/internal/attractor/runtime"
 	"github.com/strongdm/kilroy/internal/llm"
 	"github.com/strongdm/kilroy/internal/providerspec"
 )
@@ -786,14 +787,14 @@ func runProviderCLIPreflightChecks(ctx context.Context, g *model.Graph, runtimes
 				}
 			}
 		}
-		if err := runProviderCLIPromptProbePreflight(ctx, provider, models, resolvedPath, cfg, opts, report); err != nil {
+		if err := runProviderCLIPromptProbePreflight(ctx, provider, models, cfg, opts, report); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, models []string, exePath string, cfg *RunConfigFile, opts RunOptions, report *providerPreflightReport) error {
+func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, models []string, cfg *RunConfigFile, opts RunOptions, report *providerPreflightReport) error {
 	if report.PromptProbeMode == "off" {
 		report.addCheck(providerPreflightCheck{
 			Name:     "provider_prompt_probe",
@@ -841,7 +842,7 @@ func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, mo
 	}
 
 	for _, modelID := range models {
-		if _, err := runProviderCLIPromptProbe(ctx, provider, exePath, modelID, cfg, opts); err != nil {
+		if _, err := runProviderCLIPromptProbe(ctx, provider, modelID, cfg, opts); err != nil {
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_prompt_probe",
 				Provider: provider,
@@ -868,60 +869,164 @@ func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, mo
 	return nil
 }
 
-func runProviderCLIPromptProbe(ctx context.Context, provider string, exePath string, modelID string, cfg *RunConfigFile, opts RunOptions) (string, error) {
+type preflightCLIPromptProbePolicy struct {
+	Timeout   time.Duration
+	Retries   int
+	BaseDelay time.Duration
+	MaxDelay  time.Duration
+}
+
+func preflightCLIPromptProbePolicyFromConfig(cfg *RunConfigFile) preflightCLIPromptProbePolicy {
+	p := preflightCLIPromptProbePolicy{
+		Timeout:   defaultPreflightAPIPromptProbeTimeout,
+		Retries:   0,
+		BaseDelay: defaultPreflightAPIPromptProbeBaseDelay,
+		MaxDelay:  defaultPreflightAPIPromptProbeMaxDelay,
+	}
+	if cfg == nil {
+		return p
+	}
+	if v := cfg.Preflight.PromptProbes.TimeoutMS; v != nil && *v > 0 {
+		p.Timeout = time.Duration(*v) * time.Millisecond
+	}
+	if v := cfg.Preflight.PromptProbes.Retries; v != nil && *v >= 0 {
+		p.Retries = *v
+	}
+	if v := cfg.Preflight.PromptProbes.BaseDelayMS; v != nil && *v > 0 {
+		p.BaseDelay = time.Duration(*v) * time.Millisecond
+	}
+	if v := cfg.Preflight.PromptProbes.MaxDelayMS; v != nil && *v > 0 {
+		p.MaxDelay = time.Duration(*v) * time.Millisecond
+	}
+	return p
+}
+
+func preflightCLIPromptProbeBackoff(policy preflightCLIPromptProbePolicy, retryAttempt int) time.Duration {
+	if retryAttempt < 0 {
+		retryAttempt = 0
+	}
+	base := policy.BaseDelay
+	if base <= 0 {
+		base = defaultPreflightAPIPromptProbeBaseDelay
+	}
+	maxDelay := policy.MaxDelay
+	if maxDelay <= 0 {
+		maxDelay = defaultPreflightAPIPromptProbeMaxDelay
+	}
+	delay := base << retryAttempt
+	if delay < base {
+		delay = maxDelay
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
+}
+
+func runProviderCLIPromptProbe(ctx context.Context, provider string, modelID string, cfg *RunConfigFile, opts RunOptions) (string, error) {
 	if strings.TrimSpace(modelID) == "" {
 		return "", fmt.Errorf("model id is empty")
 	}
-	worktreeForInvocation := strings.TrimSpace(opts.WorktreeDir)
+	policy := preflightCLIPromptProbePolicyFromConfig(cfg)
+	if policy.Timeout <= 0 {
+		policy.Timeout = defaultPreflightAPIPromptProbeTimeout
+	}
+	attempts := policy.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastOutput string
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		output, failureClass, err := runProviderCLIPromptProbeAttempt(ctx, provider, modelID, cfg, opts, policy)
+		if err == nil {
+			return output, nil
+		}
+		lastOutput = output
+		lastErr = err
+		if attempt == attempts || !strings.EqualFold(strings.TrimSpace(failureClass), failureClassTransientInfra) {
+			break
+		}
+		delay := preflightCLIPromptProbeBackoff(policy, attempt-1)
+		if sleepErr := waitForPreflightProbeBackoff(ctx, delay); sleepErr != nil {
+			return lastOutput, sleepErr
+		}
+	}
+	return lastOutput, lastErr
+}
+
+func runProviderCLIPromptProbeAttempt(ctx context.Context, provider string, modelID string, cfg *RunConfigFile, opts RunOptions, policy preflightCLIPromptProbePolicy) (string, string, error) {
+	worktreeForInvocation := firstExistingDir(strings.TrimSpace(opts.WorktreeDir))
+	if worktreeForInvocation == "" && cfg != nil {
+		worktreeForInvocation = firstExistingDir(strings.TrimSpace(cfg.Repo.Path))
+	}
 	if worktreeForInvocation == "" {
-		worktreeForInvocation = strings.TrimSpace(cfg.Repo.Path)
+		worktreeForInvocation = firstExistingDir(strings.TrimSpace(opts.RepoPath))
 	}
 	if worktreeForInvocation == "" {
 		worktreeForInvocation = "."
 	}
-	_, args := defaultCLIInvocation(provider, modelID, worktreeForInvocation)
-	if len(args) == 0 {
-		return "", fmt.Errorf("no cli invocation mapping for provider %s", provider)
-	}
 
-	promptMode := "stdin"
-	if spec := defaultCLISpecForProvider(provider); spec != nil {
-		if mode := strings.TrimSpace(strings.ToLower(spec.PromptMode)); mode != "" {
-			promptMode = mode
-		}
+	probeCtx := ctx
+	cancel := func() {}
+	if policy.Timeout > 0 {
+		probeCtx, cancel = context.WithTimeout(ctx, policy.Timeout)
 	}
-	stdin := preflightPromptProbeText
-	actualArgs := append([]string{}, args...)
-	if promptMode == "arg" {
-		actualArgs = insertPromptArg(actualArgs, preflightPromptProbeText)
-		stdin = ""
-	}
+	defer cancel()
 
-	env := scrubConflictingProviderEnvKeys(scrubPreflightProbeEnv(os.Environ()), provider)
-	if usesCodexCLISemantics(provider, exePath) {
-		stageDir := filepath.Join(opts.LogsRoot, "preflight", "prompt-probe", safePathToken(provider), safePathToken(modelID))
-		if err := os.MkdirAll(stageDir, 0o755); err != nil {
-			return "", err
+	probeLogsRoot := filepath.Join(opts.LogsRoot, "preflight", "prompt-probe", safePathToken(provider), safePathToken(modelID))
+	router := NewCodergenRouterWithRuntimes(cfg, nil, nil)
+	execCtx := &Execution{
+		LogsRoot:    probeLogsRoot,
+		WorktreeDir: worktreeForInvocation,
+		Engine: &Engine{
+			Options: RunOptions{
+				AllowTestShim: opts.AllowTestShim,
+			},
+		},
+	}
+	probeNode := model.NewNode("cli")
+	probeNode.Attrs["shape"] = "box"
+
+	out, outcome, runErr := router.runCLI(probeCtx, execCtx, probeNode, provider, modelID, preflightPromptProbeText)
+	if runErr != nil {
+		return out, failureClassDeterministic, fmt.Errorf("probe command failed: %w", runErr)
+	}
+	if outcome != nil && outcome.Status == runtime.StatusFail {
+		failureClass := strings.TrimSpace(fmt.Sprint(outcome.Meta["failure_class"]))
+		if failureClass == "" {
+			failureClass = failureClassDeterministic
 		}
-		isolatedEnv, _, err := buildCodexIsolatedEnvWithName(stageDir, "codex-home-preflight")
+		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			failureClass = failureClassTransientInfra
+		}
+		if errors.Is(probeCtx.Err(), context.Canceled) {
+			failureClass = failureClassTransientInfra
+		}
+		reason := strings.TrimSpace(outcome.FailureReason)
+		if reason == "" {
+			reason = "provider cli invocation failed"
+		}
+		return out, failureClass, fmt.Errorf("probe command failed: %s", reason)
+	}
+	return out, "", nil
+}
+
+func firstExistingDir(candidates ...string) string {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		info, err := os.Stat(candidate)
 		if err != nil {
-			return "", err
+			continue
 		}
-		env = scrubPreflightProbeEnv(isolatedEnv)
+		if info.IsDir() {
+			return candidate
+		}
 	}
-
-	workDir := strings.TrimSpace(cfg.Repo.Path)
-	if workDir == "" {
-		workDir = strings.TrimSpace(opts.RepoPath)
-	}
-	if workDir == "" {
-		workDir = strings.TrimSpace(opts.WorktreeDir)
-	}
-	return runProviderProbeWithOptions(ctx, exePath, actualArgs, 30*time.Second, providerProbeOptions{
-		Stdin: stdin,
-		Env:   env,
-		Dir:   workDir,
-	})
+	return ""
 }
 
 func writePreflightReport(logsRoot string, report *providerPreflightReport) error {
