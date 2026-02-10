@@ -217,6 +217,13 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
 				sessCfg.MaxTurns = v
 			}
+			defaultCommandTimeoutMS, maxCommandTimeoutMS := resolveAgentLoopCommandTimeouts(execCtx, node)
+			if defaultCommandTimeoutMS > 0 {
+				sessCfg.DefaultCommandTimeoutMS = defaultCommandTimeoutMS
+			}
+			if maxCommandTimeoutMS > 0 {
+				sessCfg.MaxCommandTimeoutMS = maxCommandTimeoutMS
+			}
 			// Give lots of room for transient LLM errors before failing the stage.
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
 			sessCfg.LLMRetryPolicy = &policy
@@ -721,6 +728,38 @@ func compareIntSlices(a []int, b []int) int {
 		return -1
 	}
 	return 1
+}
+
+func resolveAgentLoopCommandTimeouts(execCtx *Execution, node *model.Node) (int, int) {
+	defaultCommandTimeoutMS := parsePositiveIntAttr(node, "default_command_timeout_ms")
+	maxCommandTimeoutMS := parsePositiveIntAttr(node, "max_command_timeout_ms")
+	if execCtx == nil || execCtx.Graph == nil {
+		return defaultCommandTimeoutMS, maxCommandTimeoutMS
+	}
+	if defaultCommandTimeoutMS <= 0 {
+		defaultCommandTimeoutMS = parseInt(execCtx.Graph.Attrs["default_command_timeout_ms"], 0)
+	}
+	if maxCommandTimeoutMS <= 0 {
+		maxCommandTimeoutMS = parseInt(execCtx.Graph.Attrs["max_command_timeout_ms"], 0)
+	}
+	if defaultCommandTimeoutMS < 0 {
+		defaultCommandTimeoutMS = 0
+	}
+	if maxCommandTimeoutMS < 0 {
+		maxCommandTimeoutMS = 0
+	}
+	return defaultCommandTimeoutMS, maxCommandTimeoutMS
+}
+
+func parsePositiveIntAttr(node *model.Node, key string) int {
+	if node == nil {
+		return 0
+	}
+	v := parseInt(node.Attr(key, ""), 0)
+	if v <= 0 {
+		return 0
+	}
+	return v
 }
 
 func profileForRuntimeProvider(rt ProviderRuntime, model string) (agent.ProviderProfile, error) {
