@@ -6,6 +6,14 @@ repo:
 cxdb:
   binary_addr: 127.0.0.1:9009
   http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command:
+      - /home/user/code/kilroy/scripts/start-cxdb.sh
+    wait_timeout_ms: 30000
+    poll_interval_ms: 250
+    ui:
+      url: http://127.0.0.1:9010
 
 llm:
   cli_profile: real

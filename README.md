@@ -110,13 +110,13 @@ cxdb:
   http_base_url: http://127.0.0.1:9010
   autostart:
     enabled: true
-    # argv form; use "sh -lc" if you need shell features.
-    command: ["sh", "-lc", "./scripts/start-cxdb.sh"]
+    # argv form; use an absolute path if you run kilroy outside repo root.
+    command: ["/absolute/path/to/kilroy/scripts/start-cxdb.sh"]
     wait_timeout_ms: 20000
     poll_interval_ms: 250
     ui:
       enabled: true
-      command: ["sh", "-lc", "./scripts/start-cxdb-ui.sh"]
+      command: ["/absolute/path/to/kilroy/scripts/start-cxdb-ui.sh"]
       url: "http://127.0.0.1:9020"
 
 llm:
@@ -227,6 +227,9 @@ Observe and intervene during long runs:
 ## CXDB Autostart Notes
 
 - `cxdb.autostart.command` is required when `cxdb.autostart.enabled=true`.
+- This repo includes `scripts/start-cxdb.sh` and `scripts/start-cxdb-ui.sh` launchers for local Docker-based CXDB.
+- `scripts/start-cxdb.sh` is idempotent: it reuses a healthy instance and starts one if missing.
+- By default `scripts/start-cxdb.sh` requires the named Docker container to avoid silently using a test shim on the same ports.
 - `cxdb.autostart.ui.url` is optional; when omitted, Kilroy auto-detects it from `cxdb.http_base_url` if that endpoint serves HTML UI.
 - `cxdb.autostart.ui.command` is optional; Kilroy starts UI when a command is provided (config or `KILROY_CXDB_UI_COMMAND`).
 - Kilroy injects these env vars for autostart commands:
@@ -238,6 +241,7 @@ Observe and intervene during long runs:
 - You can also set:
   - `KILROY_CXDB_UI_URL` to force the printed UI link.
   - `KILROY_CXDB_UI_COMMAND` as a shell command used to start UI by default.
+  - `KILROY_CXDB_ALLOW_EXTERNAL=1` to let `scripts/start-cxdb.sh` accept a pre-existing non-docker CXDB endpoint.
 - If CXDB is unreachable and autostart is disabled, Kilroy fails fast with a remediation hint.
 
 ## Provider Setup

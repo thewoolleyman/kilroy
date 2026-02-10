@@ -99,27 +99,58 @@ if [[ ! -f "$PINNED_CATALOG" ]]; then
   exit 1
 fi
 
-# Real CXDB is required; no local fake server bootstrap.
-CXDB_URL="${KILROY_BENCH_CXDB_HTTP_BASE_URL:-${CXDB_HTTP_BASE_URL:-}}"
-CXDB_BIN_ADDR="${KILROY_BENCH_CXDB_BINARY_ADDR:-${CXDB_BINARY_ADDR:-}}"
-if [[ -z "${CXDB_URL:-}" || -z "${CXDB_BIN_ADDR:-}" ]]; then
-  cat >&2 <<'EOF'
-missing real CXDB endpoints.
-Set both:
-  KILROY_BENCH_CXDB_HTTP_BASE_URL=http://127.0.0.1:9010
-  KILROY_BENCH_CXDB_BINARY_ADDR=127.0.0.1:9009
-or:
-  CXDB_HTTP_BASE_URL=...
-  CXDB_BINARY_ADDR=...
-EOF
-  exit 1
+# Real CXDB is required. Local default endpoints can be bootstrapped via the
+# launcher script.
+CXDB_URL="${KILROY_BENCH_CXDB_HTTP_BASE_URL:-${CXDB_HTTP_BASE_URL:-http://127.0.0.1:9010}}"
+CXDB_BIN_ADDR="${KILROY_BENCH_CXDB_BINARY_ADDR:-${CXDB_BINARY_ADDR:-127.0.0.1:9009}}"
+CXDB_LAUNCHER="${KILROY_BENCH_CXDB_LAUNCHER:-$ROOT/scripts/start-cxdb.sh}"
+
+cxdb_health_ok() {
+  if curl -s -S -m 2 "$CXDB_URL/health" >/dev/null 2>&1; then
+    return 0
+  fi
+  curl -s -S -m 2 "$CXDB_URL/healthz" >/dev/null 2>&1
+}
+
+extract_http_host() {
+  local url="$1"
+  local without_scheme="${url#http://}"
+  without_scheme="${without_scheme#https://}"
+  without_scheme="${without_scheme%%/*}"
+  printf '%s\n' "${without_scheme%:*}"
+}
+
+extract_addr_host() {
+  local addr="$1"
+  printf '%s\n' "${addr%:*}"
+}
+
+is_local_host() {
+  case "$1" in
+    127.0.0.1|localhost|0.0.0.0) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [[ "${KILROY_BENCH_BOOTSTRAP_CXDB:-1}" == "1" && -x "$CXDB_LAUNCHER" ]]; then
+  http_host="$(extract_http_host "$CXDB_URL")"
+  bin_host="$(extract_addr_host "$CXDB_BIN_ADDR")"
+  if is_local_host "$http_host" && is_local_host "$bin_host"; then
+    echo "ensuring real CXDB via launcher: $CXDB_LAUNCHER"
+    KILROY_CXDB_HTTP_BASE_URL="$CXDB_URL" KILROY_CXDB_BINARY_ADDR="$CXDB_BIN_ADDR" "$CXDB_LAUNCHER"
+  fi
 fi
 
-if ! curl -s -S -m 2 "$CXDB_URL/health" >/dev/null 2>&1; then
-  if ! curl -s -S -m 2 "$CXDB_URL/healthz" >/dev/null 2>&1; then
-    echo "real CXDB health check failed for $CXDB_URL (/health and /healthz)" >&2
-    exit 1
-  fi
+if ! cxdb_health_ok; then
+  cat >&2 <<EOF
+real CXDB health check failed for $CXDB_URL (/health and /healthz).
+set endpoints:
+  KILROY_BENCH_CXDB_HTTP_BASE_URL=http://127.0.0.1:9010
+  KILROY_BENCH_CXDB_BINARY_ADDR=127.0.0.1:9009
+or disable launcher bootstrap:
+  KILROY_BENCH_BOOTSTRAP_CXDB=0
+EOF
+  exit 1
 fi
 
 echo "cxdb_url=$CXDB_URL"
