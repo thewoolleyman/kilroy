@@ -254,33 +254,13 @@ type preflightAPIPromptProbePolicy struct {
 
 func configuredAPIPromptProbeTransports(cfg *RunConfigFile) ([]string, bool, error) {
 	if cfg != nil && len(cfg.Preflight.PromptProbes.Transports) > 0 {
-		seen := map[string]bool{}
-		out := make([]string, 0, len(cfg.Preflight.PromptProbes.Transports))
-		for _, raw := range cfg.Preflight.PromptProbes.Transports {
-			normalized := normalizePromptProbeTransport(raw)
-			if normalized == "" {
-				return nil, false, fmt.Errorf("invalid preflight.prompt_probes.transports value %q (want complete|stream)", strings.TrimSpace(raw))
-			}
-			if seen[normalized] {
-				continue
-			}
-			seen[normalized] = true
-			out = append(out, normalized)
+		out, err := normalizePromptProbeTransports(cfg.Preflight.PromptProbes.Transports)
+		if err != nil {
+			return nil, false, err
 		}
 		return out, true, nil
 	}
 	return []string{"complete", "stream"}, false, nil
-}
-
-func normalizePromptProbeTransport(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "complete", "responses", "response":
-		return "complete"
-	case "stream", "streaming":
-		return "stream"
-	default:
-		return ""
-	}
 }
 
 func preflightAPIPromptProbePolicyFromEnv() preflightAPIPromptProbePolicy {

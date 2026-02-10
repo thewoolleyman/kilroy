@@ -294,18 +294,9 @@ func validateConfig(cfg *RunConfigFile) error {
 		}
 	}
 	if len(cfg.Preflight.PromptProbes.Transports) > 0 {
-		normalized := make([]string, 0, len(cfg.Preflight.PromptProbes.Transports))
-		seen := map[string]bool{}
-		for _, raw := range cfg.Preflight.PromptProbes.Transports {
-			v := normalizePromptProbeTransport(raw)
-			if v == "" {
-				return fmt.Errorf("invalid preflight.prompt_probes.transports value %q (want complete|stream)", strings.TrimSpace(raw))
-			}
-			if seen[v] {
-				continue
-			}
-			seen[v] = true
-			normalized = append(normalized, v)
+		normalized, err := normalizePromptProbeTransports(cfg.Preflight.PromptProbes.Transports)
+		if err != nil {
+			return err
 		}
 		cfg.Preflight.PromptProbes.Transports = normalized
 	}

@@ -135,18 +135,18 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func waitForPIDExit(proc verifiedProcess, grace time.Duration) bool {
-	if !pidRunning(proc.PID) || !processIdentityMatches(proc) {
+	if !procutil.PIDAlive(proc.PID) || !processIdentityMatches(proc) {
 		return true
 	}
 	deadline := time.Now().Add(grace)
 	poll := adaptiveGracePoll(grace)
 	for time.Now().Before(deadline) {
 		time.Sleep(poll)
-		if !pidRunning(proc.PID) || !processIdentityMatches(proc) {
+		if !procutil.PIDAlive(proc.PID) || !processIdentityMatches(proc) {
 			return true
 		}
 	}
-	return !pidRunning(proc.PID) || !processIdentityMatches(proc)
+	return !procutil.PIDAlive(proc.PID) || !processIdentityMatches(proc)
 }
 
 func adaptiveGracePoll(grace time.Duration) time.Duration {
@@ -158,10 +158,6 @@ func adaptiveGracePoll(grace time.Duration) time.Duration {
 		poll = 100 * time.Millisecond
 	}
 	return poll
-}
-
-func pidRunning(pid int) bool {
-	return procutil.PIDAlive(pid)
 }
 
 func verifyAttractorRunPID(pid int, logsRoot string, runID string) (verifiedProcess, error) {
@@ -299,7 +295,7 @@ func captureVerifiedProcess(pid int) (verifiedProcess, error) {
 }
 
 func verifyProcessIdentity(proc verifiedProcess) error {
-	if !pidRunning(proc.PID) {
+	if !procutil.PIDAlive(proc.PID) {
 		return fmt.Errorf("refusing to signal pid %d: process is no longer running", proc.PID)
 	}
 	if !proc.StartTimeKnown {
