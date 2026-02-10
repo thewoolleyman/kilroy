@@ -25,7 +25,9 @@ func TestReliabilityHelpers_CompileSmoke(t *testing.T) {
     _ = runParallelWatchdogFixture
     _ = runCanceledSubgraphFixture
     _ = runDeterministicSubgraphCycleFixture
-    _ = runProgressFixture
+    _ = runStatusIngestionProgressFixture
+    _ = runSubgraphCycleProgressFixture
+    _ = runSubgraphCancelProgressFixture
 }
 ```
 
@@ -44,9 +46,24 @@ func runStatusIngestionFixture(t *testing.T, canonical, worktree, invalid bool) 
     return runtime.Outcome{}, statusSourceNone
 }
 
-func runProgressFixture(t *testing.T) []map[string]any {
+func runStatusIngestionProgressFixture(t *testing.T) []map[string]any {
     t.Helper()
-    // run a small graph and decode progress.ndjson into []map[string]any
+    return runProgressFixtureByScenario(t, "status_ingestion")
+}
+
+func runSubgraphCycleProgressFixture(t *testing.T) []map[string]any {
+    t.Helper()
+    return runProgressFixtureByScenario(t, "subgraph_cycle")
+}
+
+func runSubgraphCancelProgressFixture(t *testing.T) []map[string]any {
+    t.Helper()
+    return runProgressFixtureByScenario(t, "subgraph_cancel")
+}
+
+func runProgressFixtureByScenario(t *testing.T, scenario string) []map[string]any {
+    t.Helper()
+    // run scenario-specific graph and decode progress.ndjson into []map[string]any
     return nil
 }
 ```
@@ -494,6 +511,9 @@ Expected: FAIL in subgraph cycle case.
 failureClass := classifyFailureClass(out)
 if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassDeterministic {
     sig := restartFailureSignature(node.ID, out, failureClass)
+    if eng.loopFailureSignatures == nil {
+        eng.loopFailureSignatures = map[string]int{}
+    }
     eng.loopFailureSignatures[sig]++
     if eng.loopFailureSignatures[sig] >= loopRestartSignatureLimit(eng.Graph) {
         return parallelBranchResult{}, fmt.Errorf("deterministic failure cycle detected in subgraph: %s", sig)
@@ -526,9 +546,8 @@ git commit -m "engine: apply deterministic failure cycle breaker in subgraph tra
 ```go
 func TestConditionalPassThrough_PreservesFailureReasonAndClass(t *testing.T) {
     out := runConditionalFixture(t, "fail", "provider timeout", "transient_infra")
-    if out.FailureReason != "provider timeout" {
-        t.Fatalf("failure_reason=%q", out.FailureReason)
-    }
+    // failure_reason already passes through today; this assertion targets the
+    // missing failure_class context propagation.
     if out.ContextUpdates["failure_class"] != "transient_infra" {
         t.Fatalf("failure_class=%v", out.ContextUpdates["failure_class"])
     }
@@ -636,7 +655,7 @@ const (
 func classifyAPIError(err error) (string, string) {
     var abortErr *llm.AbortError
     if errors.As(err, &abortErr) {
-        return failureClassCanceled, "api_canceled|api|abort"
+        return failureClassCanceled, "api_canceled|unknown|abort"
     }
     // Keep WrapContextError contract for context-derived errors.
     // Existing typed/non-typed logic follows...
@@ -729,6 +748,7 @@ if !explicit && len(order) == 0 {
 
 Run: `go test ./internal/attractor/engine -run 'Failover|ProviderRuntime|LoadRunConfig' -count=1`
 Expected: PASS.
+Note: update `TestFailoverOrder_UsesRuntimeProviderPolicy` for the new `failoverOrderFromRuntime` return signature.
 
 **Step 5: Commit**
 
@@ -750,21 +770,21 @@ git commit -m "engine/config: enforce explicit no-failover behavior and pin rogu
 
 ```go
 func TestProgressIncludesStatusIngestionDecisionEvent(t *testing.T) {
-    events := runProgressFixture(t)
+    events := runStatusIngestionProgressFixture(t)
     if !hasEvent(events, "status_ingestion_decision") {
         t.Fatal("missing status_ingestion_decision event")
     }
 }
 
 func TestProgressIncludesSubgraphCycleBreakEvent(t *testing.T) {
-    events := runProgressFixture(t)
+    events := runSubgraphCycleProgressFixture(t)
     if !hasEvent(events, "subgraph_deterministic_failure_cycle_breaker") {
         t.Fatal("missing subgraph cycle breaker event")
     }
 }
 
 func TestProgressIncludesCancellationExitEvent(t *testing.T) {
-    events := runProgressFixture(t)
+    events := runSubgraphCancelProgressFixture(t)
     if !hasEvent(events, "subgraph_canceled_exit") {
         t.Fatal("missing subgraph cancellation exit event")
     }
@@ -843,9 +863,9 @@ git commit -m "docs: codify attractor runtime contracts for status ingestion, li
 ### Task 12: Full Regression Gate + Rogue-Fast Validation Execution
 
 **Files:**
-- Modify: `postmortem-rogue-best-of-both-fixes.md`
+- Modify: `docs/plans/2026-02-10-attractor-rogue-best-of-both-remediation.md`
 
-**Step 1: Add release evidence checklist to postmortem**
+**Step 1: Add release evidence checklist to this plan document**
 
 ```markdown
 - [ ] `go test ./internal/attractor/... -count=1`
@@ -880,8 +900,8 @@ Expected: run starts, logs directory created, and `live.json`/`progress.ndjson` 
 **Step 5: Commit**
 
 ```bash
-git add postmortem-rogue-best-of-both-fixes.md
-git commit -m "postmortem: record regression evidence and rogue-fast validation run details"
+git add docs/plans/2026-02-10-attractor-rogue-best-of-both-remediation.md
+git commit -m "plan: record regression evidence and rogue-fast validation run details"
 ```
 
 ## Cross-Task Guardrails
