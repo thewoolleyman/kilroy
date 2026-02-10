@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/strongdm/kilroy/internal/attractor/runstate"
 )
@@ -62,7 +63,7 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "pid=%d\n", snapshot.PID)
 	fmt.Fprintf(stdout, "pid_alive=%t\n", snapshot.PIDAlive)
 	if !snapshot.LastEventAt.IsZero() {
-		fmt.Fprintf(stdout, "last_event_at=%s\n", snapshot.LastEventAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"))
+		fmt.Fprintf(stdout, "last_event_at=%s\n", snapshot.LastEventAt.UTC().Format(time.RFC3339Nano))
 	}
 	if snapshot.FailureReason != "" {
 		fmt.Fprintf(stdout, "failure_reason=%s\n", snapshot.FailureReason)

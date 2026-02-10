@@ -76,8 +76,8 @@ func parseProcStatLine(line string) (byte, uint64, error) {
 	if len(fields) < 20 {
 		return 0, 0, fmt.Errorf("malformed stat fields")
 	}
-	// starttime is field 22 in /proc/<pid>/stat (1-indexed), which maps to
-	// index 19 after trimming the leading "pid (comm) state" segment above.
+	// fields[0] is state (field 3 in /proc/<pid>/stat); therefore starttime
+	// (field 22, 1-indexed) maps to fields[19].
 	startTime, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
 		return 0, 0, err

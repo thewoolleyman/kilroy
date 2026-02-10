@@ -135,7 +135,7 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if cfg.Git.RunBranchPrefix == "" {
 		cfg.Git.RunBranchPrefix = "attractor/run"
 	}
-	// metaspec default.
+	// metaspec v1 forces commit_per_node=true; explicit false is ignored.
 	if !cfg.Git.CommitPerNode {
 		cfg.Git.CommitPerNode = true
 	}
