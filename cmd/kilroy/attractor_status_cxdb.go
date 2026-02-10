@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,15 +75,17 @@ func runFollowCXDB(logsRoot string, w io.Writer, raw bool) int {
 	defer ticker.Stop()
 
 	for {
-		// Fetch new turns since last depth.
-		turns, err := client.ListTurns(ctx, manifest.CXDB.ContextID, cxdb.ListTurnsOptions{
-			Limit: 100,
-		})
+		// Fetch all turns and sort by depth ascending so we process in order
+		// regardless of CXDB's return ordering. This also ensures we never
+		// skip events when the response is capped by a server-side limit.
+		turns, err := client.ListTurns(ctx, manifest.CXDB.ContextID, cxdb.ListTurnsOptions{})
 		if err != nil {
 			// CXDB may have gone down — just wait and retry.
 			<-ticker.C
 			continue
 		}
+
+		sort.Slice(turns, func(i, j int) bool { return turns[i].Depth < turns[j].Depth })
 
 		// Print turns we haven't seen yet.
 		for _, turn := range turns {
