@@ -484,6 +484,11 @@ func pickFailoverModelFromRuntime(provider string, runtimes map[string]ProviderR
 	if provider == "" {
 		return strings.TrimSpace(fallbackModel)
 	}
+	if provider == "zai" {
+		// ZAI coding endpoint model availability does not match OpenRouter's
+		// broader catalog variants; keep failover on a stable ZAI model.
+		return stabilizeZAIFailoverModel(fallbackModel)
+	}
 	if model := strings.TrimSpace(pickFailoverModel(provider, catalog)); model != "" {
 		return model
 	}
@@ -492,6 +497,24 @@ func pickFailoverModelFromRuntime(provider string, runtimes map[string]ProviderR
 		return providerModelIDFromCatalogKey(provider, ids[0])
 	}
 	return strings.TrimSpace(fallbackModel)
+}
+
+func stabilizeZAIFailoverModel(fallbackModel string) string {
+	m := strings.TrimSpace(fallbackModel)
+	if m == "" {
+		return "glm-4.7"
+	}
+	lower := strings.ToLower(m)
+	switch {
+	case strings.HasPrefix(lower, "glm-"):
+		return m
+	case strings.HasPrefix(lower, "z-ai/"):
+		return strings.TrimSpace(m[len("z-ai/"):])
+	case strings.HasPrefix(lower, "z.ai/"):
+		return strings.TrimSpace(m[len("z.ai/"):])
+	default:
+		return "glm-4.7"
+	}
 }
 
 func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {

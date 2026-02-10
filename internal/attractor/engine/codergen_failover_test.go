@@ -186,6 +186,33 @@ func TestPickFailoverModelFromRuntime_NeverReturnsEmptyForConfiguredProvider(t *
 	}
 }
 
+func TestPickFailoverModelFromRuntime_ZAIDoesNotRotateCatalogVariants(t *testing.T) {
+	rt := map[string]ProviderRuntime{
+		"zai": {Key: "zai"},
+	}
+	catalog := &modeldb.Catalog{
+		Models: map[string]modeldb.ModelEntry{
+			"z-ai/glm-4.6:exacto":   {Provider: "zai"},
+			"z-ai/glm-4.5-air:free": {Provider: "zai"},
+			"z-ai/glm-4.5v":         {Provider: "zai"},
+		},
+	}
+	got := pickFailoverModelFromRuntime("zai", rt, catalog, "gpt-5.2-codex")
+	if got != "glm-4.7" {
+		t.Fatalf("expected stable zai model glm-4.7, got %q", got)
+	}
+}
+
+func TestPickFailoverModelFromRuntime_ZAINormalizesProviderPrefixedFallback(t *testing.T) {
+	rt := map[string]ProviderRuntime{
+		"zai": {Key: "zai"},
+	}
+	got := pickFailoverModelFromRuntime("zai", rt, nil, "z-ai/glm-4.7")
+	if got != "glm-4.7" {
+		t.Fatalf("expected provider-relative zai model, got %q", got)
+	}
+}
+
 func TestEnsureAPIClient_UsesSyncOnce(t *testing.T) {
 	var calls atomic.Int32
 	r := NewCodergenRouterWithRuntimes(&RunConfigFile{}, nil, map[string]ProviderRuntime{
