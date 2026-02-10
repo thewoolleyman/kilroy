@@ -47,6 +47,7 @@ func Validate(g *model.Graph) []Diagnostic {
 	diags = append(diags, lintFidelityValid(g)...)
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
+	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
 	return diags
 }
 
@@ -476,4 +477,90 @@ func lintLLMProviderPresent(g *model.Graph) []Diagnostic {
 		}
 	}
 	return diags
+}
+
+func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for _, e := range g.Edges {
+		if e == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(e.Attr("loop_restart", "false")), "true") {
+			continue
+		}
+		condExpr := strings.TrimSpace(e.Condition())
+		if !conditionMentionsFailureOutcome(condExpr) {
+			continue
+		}
+		if conditionHasTransientInfraGuard(condExpr) {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "loop_restart_failure_class_guard",
+			Severity: SeverityWarning,
+			Message:  "loop_restart on failure edge should be guarded by context.failure_class=transient_infra and paired with a non-restart deterministic fail edge",
+			EdgeFrom: e.From,
+			EdgeTo:   e.To,
+			Fix:      "split edge into transient-infra restart + non-transient retry edges",
+		})
+	}
+	return diags
+}
+
+func conditionMentionsFailureOutcome(condExpr string) bool {
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if strings.Contains(clause, "!=") {
+			parts := strings.SplitN(clause, "!=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.Trim(strings.ToLower(strings.TrimSpace(parts[1])), "\"'")
+			if key == "outcome" && val == "success" {
+				return true
+			}
+			continue
+		}
+		if !strings.Contains(clause, "=") {
+			continue
+		}
+		parts := strings.SplitN(clause, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.Trim(strings.ToLower(strings.TrimSpace(parts[1])), "\"'")
+		if key != "outcome" {
+			continue
+		}
+		if val == "fail" || val == "retry" || val == "partial_success" {
+			return true
+		}
+	}
+	return false
+}
+
+func conditionHasTransientInfraGuard(condExpr string) bool {
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if !strings.Contains(clause, "=") || strings.Contains(clause, "!=") {
+			continue
+		}
+		parts := strings.SplitN(clause, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.Trim(strings.ToLower(strings.TrimSpace(parts[1])), "\"'")
+		if key == "context.failure_class" || key == "failure_class" {
+			if val == "transient_infra" {
+				return true
+			}
+		}
+	}
+	return false
 }
