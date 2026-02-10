@@ -1260,3 +1260,82 @@ wait
 	}
 	return p
 }
+
+func TestRunWithConfig_PreflightPromptProbe_SkipsCodexWhenNoAPIKey(t *testing.T) {
+	// When codex CLI is the provider and OPENAI_API_KEY is not set, the prompt
+	// probe should be skipped with a warning rather than failing. Codex supports
+	// browser-based "chatgpt" auth which stores session tokens in ~/.codex/ and
+	// cannot be tested in the probe's isolated environment.
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "on")
+	t.Setenv("OPENAI_API_KEY", "") // explicitly unset
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2-codex"}
+  ]
+}`)
+
+	// Create a fake codex CLI that passes capability probe but would FAIL prompt
+	// probe. Place it on PATH so it's discovered via the default executable
+	// resolution (real mode does not allow explicit Executable overrides).
+	binDir := t.TempDir()
+	probeFailed := filepath.Join(t.TempDir(), "probe-should-not-run")
+	codexCLI := filepath.Join(binDir, "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+cat <<'EOF'
+Usage: codex exec --json --sandbox workspace-write
+EOF
+exit 0
+fi
+# If we get here, the prompt probe was NOT skipped.
+echo "reached" > %q
+echo "auth error: chatgpt session not found" >&2
+exit 1
+`, probeFailed)
+	if err := os.WriteFile(codexCLI, []byte(script), 0o755); err != nil {
+		t.Fatalf("write codex fake cli: %v", err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendCLI,
+	})
+	// Use "real" profile — the chatgpt auth skip only applies in real mode.
+	cfg.LLM.CLIProfile = "real"
+	dot := singleProviderDot("openai", "gpt-5.2-codex")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-codex-skip", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	// The run should fail later (CXDB not running), NOT at the preflight stage.
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure (prompt probe should have been skipped): %v", err)
+	}
+
+	// Verify the prompt probe script was never invoked.
+	if _, statErr := os.Stat(probeFailed); statErr == nil {
+		t.Fatalf("prompt probe was invoked despite codex chatgpt auth skip; marker file exists: %s", probeFailed)
+	}
+
+	// Verify the preflight report contains a warn check with the skip reason.
+	report := mustReadPreflightReport(t, logsRoot)
+	found := false
+	for _, check := range report.Checks {
+		if check.Name == "provider_prompt_probe" && check.Status == "warn" {
+			if reason, ok := check.Details["skip_reason"]; ok && reason == "codex_chatgpt_auth" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected warn check with skip_reason=codex_chatgpt_auth in preflight report; got: %+v", report.Checks)
+	}
+}

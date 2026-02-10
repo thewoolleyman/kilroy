@@ -756,6 +756,28 @@ func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, mo
 		})
 		return nil
 	}
+
+	// Codex CLI supports two auth modes: API key (OPENAI_API_KEY) and browser-based
+	// "chatgpt" auth (session tokens stored in ~/.codex/). The prompt probe runs in
+	// an isolated environment where browser auth tokens are unavailable. When no API
+	// key is set, skip the probe with a warning rather than failing the entire run.
+	// This skip does not apply in test_shim mode where the operator provides a fake executable.
+	if usesCodexCLISemantics(provider, exePath) &&
+		strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) == "" &&
+		normalizedCLIProfile(cfg) != "test_shim" {
+		report.addCheck(providerPreflightCheck{
+			Name:     "provider_prompt_probe",
+			Provider: provider,
+			Status:   preflightStatusWarn,
+			Message:  "prompt probe skipped: codex cli detected without OPENAI_API_KEY (likely using chatgpt browser auth which cannot be tested in isolated probe)",
+			Details: map[string]any{
+				"backend":    "cli",
+				"skip_reason": "codex_chatgpt_auth",
+			},
+		})
+		return nil
+	}
+
 	for _, modelID := range models {
 		if _, err := runProviderCLIPromptProbe(ctx, provider, exePath, modelID, cfg, opts); err != nil {
 			report.addCheck(providerPreflightCheck{
