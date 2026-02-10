@@ -824,15 +824,9 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		}
 
 		failureClass := classifyFailureClass(out)
-		hintProvided := strings.TrimSpace(readFailureClassHint(out)) != ""
 		canRetry := false
 		if attempt < maxAttempts {
-			if hintProvided {
-				canRetry = shouldRetryOutcome(out, failureClass)
-			} else {
-				// Preserve existing retry behavior for unclassified stage outcomes.
-				canRetry = out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry
-			}
+			canRetry = shouldRetryOutcome(out, failureClass)
 		}
 		if canRetry {
 			retries[node.ID]++
@@ -848,7 +842,7 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			time.Sleep(delay)
 			continue
 		}
-		if hintProvided && attempt < maxAttempts && (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) {
+		if attempt < maxAttempts && (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) {
 			e.appendProgress(map[string]any{
 				"event":          "stage_retry_blocked",
 				"node_id":        node.ID,

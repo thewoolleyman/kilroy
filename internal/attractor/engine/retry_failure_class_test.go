@@ -257,3 +257,60 @@ digraph G {
 		})
 	}
 }
+
+func TestRun_UnclassifiedDeterministicFailure_DoesNotRetry(t *testing.T) {
+	logsRoot := t.TempDir()
+	handler := &scriptedOutcomeHandler{
+		outcomes: []runtime.Outcome{
+			{
+				Status:        runtime.StatusRetry,
+				FailureReason: "model 'kimi-k2.5' does not exist",
+				// NOTE: no failure_class hint — exercises the engine's fallback path
+			},
+		},
+	}
+	eng, node := newRetryGateTestEngine(t, logsRoot, 3, handler)
+
+	out, err := eng.executeWithRetry(context.Background(), node, map[string]int{})
+	if err != nil {
+		t.Fatalf("executeWithRetry: %v", err)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status: got %q want %q", out.Status, runtime.StatusFail)
+	}
+	if handler.calls != 1 {
+		t.Fatalf("attempts: got %d want 1 (unclassified deterministic should not retry)", handler.calls)
+	}
+	if !hasProgressEvent(t, logsRoot, "stage_retry_blocked") {
+		t.Fatalf("expected stage_retry_blocked for unclassified deterministic failure")
+	}
+}
+
+func TestRun_UnclassifiedTransientFailure_StillRetries(t *testing.T) {
+	logsRoot := t.TempDir()
+	handler := &scriptedOutcomeHandler{
+		outcomes: []runtime.Outcome{
+			{
+				Status:        runtime.StatusRetry,
+				FailureReason: "connection refused",
+				// NOTE: no failure_class hint — but reason matches transient heuristic
+			},
+			{
+				Status: runtime.StatusSuccess,
+				Notes:  "recovered after retry",
+			},
+		},
+	}
+	eng, node := newRetryGateTestEngine(t, logsRoot, 3, handler)
+
+	out, err := eng.executeWithRetry(context.Background(), node, map[string]int{})
+	if err != nil {
+		t.Fatalf("executeWithRetry: %v", err)
+	}
+	if out.Status != runtime.StatusSuccess {
+		t.Fatalf("status: got %q want %q", out.Status, runtime.StatusSuccess)
+	}
+	if handler.calls != 2 {
+		t.Fatalf("attempts: got %d want 2 (transient should retry once then succeed)", handler.calls)
+	}
+}

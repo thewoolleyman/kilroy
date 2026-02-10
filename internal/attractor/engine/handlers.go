@@ -418,7 +418,16 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
-		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout)}, nil
+		return runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout),
+			Meta: map[string]any{
+				"failure_class": failureClassTransientInfra,
+			},
+			ContextUpdates: map[string]any{
+				"failure_class": failureClassTransientInfra,
+			},
+		}, nil
 	}
 
 	if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
@@ -458,8 +467,12 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
 			FailureReason: runErr.Error(),
+			Meta: map[string]any{
+				"failure_class": failureClassTransientInfra,
+			},
 			ContextUpdates: map[string]any{
-				"tool.output": truncate(combinedStr, 8_000),
+				"tool.output":   truncate(combinedStr, 8_000),
+				"failure_class": failureClassTransientInfra,
 			},
 		}, nil
 	}
