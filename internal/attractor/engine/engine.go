@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1413,11 +1412,7 @@ func (e *Engine) runStallWatchdog(ctx context.Context, cancel context.CancelCaus
 }
 
 func writeJSON(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
+	return runtime.WriteJSONAtomicFile(path, v)
 }
 
 func copyStringIntMap(in map[string]int) map[string]int {

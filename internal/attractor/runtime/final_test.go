@@ -26,3 +26,22 @@ func TestFinalOutcome_Save_WritesJSON(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomic_OverwritesTargetAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+
+	if err := os.WriteFile(path, []byte(`{"status":"old"}`), 0o644); err != nil {
+		t.Fatalf("seed status file: %v", err)
+	}
+	if err := WriteFileAtomic(path, []byte(`{"status":"new"}`)); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read status file: %v", err)
+	}
+	if got := string(b); got != `{"status":"new"}` {
+		t.Fatalf("status payload: got %q want %q", got, `{"status":"new"}`)
+	}
+}

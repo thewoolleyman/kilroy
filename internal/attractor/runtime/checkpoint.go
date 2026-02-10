@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -37,14 +36,7 @@ func (cp *Checkpoint) Save(path string) error {
 	if cp == nil {
 		return fmt.Errorf("checkpoint is nil")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(cp, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
+	return WriteJSONAtomicFile(path, cp)
 }
 
 func LoadCheckpoint(path string) (*Checkpoint, error) {

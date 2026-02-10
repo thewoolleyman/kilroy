@@ -1,10 +1,7 @@
 package runtime
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -32,12 +29,5 @@ func (fo *FinalOutcome) Save(path string) error {
 	if fo == nil {
 		return fmt.Errorf("final outcome is nil")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(fo, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
+	return WriteJSONAtomicFile(path, fo)
 }
