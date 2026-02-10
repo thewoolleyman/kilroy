@@ -168,11 +168,64 @@ func TestProfileForRuntimeProvider_RoutesByRuntimeProviderAndKeepsFamilyBehavior
 
 func TestFailoverOrder_UsesRuntimeProviderPolicy(t *testing.T) {
 	rt := map[string]ProviderRuntime{
-		"kimi": {Key: "kimi", Failover: []string{"zai", "openai"}},
+		"kimi": {Key: "kimi", Failover: []string{"zai", "openai"}, FailoverExplicit: true},
 	}
-	got := failoverOrderFromRuntime("kimi", rt)
+	got, explicit := failoverOrderFromRuntime("kimi", rt)
 	if strings.Join(got, ",") != "zai,openai" {
 		t.Fatalf("failover mismatch: %v", got)
+	}
+	if !explicit {
+		t.Fatalf("expected explicit failover policy")
+	}
+}
+
+func TestFailoverOrder_ExplicitEmptyFailoverPreserved(t *testing.T) {
+	rt := map[string]ProviderRuntime{
+		"openai": {Key: "openai", Failover: []string{}, FailoverExplicit: true},
+	}
+	got, explicit := failoverOrderFromRuntime("openai", rt)
+	if !explicit {
+		t.Fatalf("expected explicit=true for empty failover override")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty failover order, got %v", got)
+	}
+}
+
+func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {
+			Backend:  BackendAPI,
+			Failover: []string{},
+		},
+		"anthropic": {
+			Backend: BackendAPI,
+		},
+	}
+	runtimes, err := resolveProviderRuntimes(cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderRuntimes: %v", err)
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
+
+	client := llm.NewClient()
+	client.Register(&okAdapter{name: "openai"})
+	client.Register(&okAdapter{name: "anthropic"})
+
+	attemptedAnthropic := false
+	_, _, err = r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, client, "openai", "gpt-5.2-codex", func(prov string, mid string) (string, error) {
+		_ = mid
+		if prov == "anthropic" {
+			attemptedAnthropic = true
+		}
+		return "", llm.NewNetworkError(prov, "connection reset")
+	})
+	if err == nil || !strings.Contains(err.Error(), "no failover allowed by runtime config") {
+		t.Fatalf("expected explicit no-failover error, got %v", err)
+	}
+	if attemptedAnthropic {
+		t.Fatalf("unexpected failover attempt when failover=[] is explicit")
 	}
 }
 

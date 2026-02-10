@@ -52,6 +52,9 @@ func TestResolveProviderRuntimes_ExplicitEmptyFailoverDisablesBuiltinFallback(t 
 	if got := len(rt["zai"].Failover); got != 0 {
 		t.Fatalf("zai failover len=%d want 0 for explicit empty override", got)
 	}
+	if !rt["zai"].FailoverExplicit {
+		t.Fatalf("zai failover should be marked explicit")
+	}
 }
 
 func TestResolveProviderRuntimes_OmittedFailoverUsesBuiltinFallback(t *testing.T) {
@@ -72,6 +75,9 @@ func TestResolveProviderRuntimes_OmittedFailoverUsesBuiltinFallback(t *testing.T
 	}
 	if got := rt["zai"].Failover; len(got) != 2 || got[0] != "openai" || got[1] != "kimi" {
 		t.Fatalf("zai failover=%v want [openai kimi]", got)
+	}
+	if rt["zai"].FailoverExplicit {
+		t.Fatalf("zai failover should not be marked explicit when omitted")
 	}
 }
 

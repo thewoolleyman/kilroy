@@ -9,14 +9,15 @@ import (
 )
 
 type ProviderRuntime struct {
-	Key           string
-	Backend       BackendKind
-	Executable    string
-	API           providerspec.APISpec
-	CLI           *providerspec.CLISpec
-	APIHeadersMap map[string]string
-	Failover      []string
-	ProfileFamily string
+	Key              string
+	Backend          BackendKind
+	Executable       string
+	API              providerspec.APISpec
+	CLI              *providerspec.CLISpec
+	APIHeadersMap    map[string]string
+	Failover         []string
+	FailoverExplicit bool
+	ProfileFamily    string
 }
 
 func (r ProviderRuntime) APIHeaders() map[string]string {
@@ -79,6 +80,7 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 		// - failover: [] => no failover targets for this provider
 		// - failover omitted => inherit builtin failover policy
 		if pc.Failover != nil {
+			rt.FailoverExplicit = true
 			rt.Failover = providerspec.CanonicalizeProviderList(pc.Failover)
 		} else if len(builtin.Failover) > 0 {
 			rt.Failover = providerspec.CanonicalizeProviderList(builtin.Failover)

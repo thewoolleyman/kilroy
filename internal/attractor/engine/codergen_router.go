@@ -326,8 +326,8 @@ func (r *CodergenRouter) withFailoverText(
 	}
 
 	cands := []providerModel{{Provider: primaryProvider, Model: primaryModel}}
-	order := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
-	if len(order) == 0 {
+	order, failoverExplicit := failoverOrderFromRuntime(primaryProvider, r.providerRuntimes)
+	if !failoverExplicit && len(order) == 0 {
 		order = failoverOrder(primaryProvider)
 	}
 	for _, p := range order {
@@ -390,6 +390,9 @@ func (r *CodergenRouter) withFailoverText(
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("llm call failed (no attempts made)")
+	}
+	if failoverExplicit && len(order) == 0 && shouldFailoverLLMError(lastErr) {
+		return "", cands[0], fmt.Errorf("no failover allowed by runtime config for provider %s", primaryProvider)
 	}
 	return "", cands[0], lastErr
 }
@@ -471,16 +474,19 @@ func shouldFailoverLLMError(err error) bool {
 	return true
 }
 
-func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntime) []string {
+func failoverOrderFromRuntime(primary string, runtimes map[string]ProviderRuntime) ([]string, bool) {
 	primary = normalizeProviderKey(primary)
 	if primary == "" || len(runtimes) == 0 {
-		return nil
+		return nil, false
 	}
 	rt, ok := runtimes[primary]
-	if !ok || len(rt.Failover) == 0 {
-		return nil
+	if !ok {
+		return nil, false
 	}
-	return append([]string{}, rt.Failover...)
+	if len(rt.Failover) == 0 {
+		return nil, rt.FailoverExplicit
+	}
+	return append([]string{}, rt.Failover...), rt.FailoverExplicit
 }
 
 func failoverOrder(primary string) []string {
