@@ -262,17 +262,20 @@ digraph rogue_fast {
     expand_spec -> impl_analysis
     impl_analysis -> verify_analysis -> check_analysis
     check_analysis -> impl_architecture     [condition="outcome=success"]
-    check_analysis -> impl_analysis         [condition="outcome=fail", label="retry", loop_restart=true]
+    check_analysis -> impl_analysis         [condition="outcome=fail && context.failure_class=transient_infra", label="retry-infra", loop_restart=true]
+    check_analysis -> impl_analysis         [condition="outcome=fail && context.failure_class!=transient_infra", label="retry"]
 
     // Architecture
     impl_architecture -> verify_architecture -> check_architecture
     check_architecture -> impl_scaffold     [condition="outcome=success"]
-    check_architecture -> impl_architecture [condition="outcome=fail", label="retry", loop_restart=true]
+    check_architecture -> impl_architecture [condition="outcome=fail && context.failure_class=transient_infra", label="retry-infra", loop_restart=true]
+    check_architecture -> impl_architecture [condition="outcome=fail && context.failure_class!=transient_infra", label="retry"]
 
     // Scaffold
     impl_scaffold -> verify_scaffold -> check_scaffold
     check_scaffold -> fanout                [condition="outcome=success"]
-    check_scaffold -> impl_scaffold         [condition="outcome=fail", label="retry", loop_restart=true]
+    check_scaffold -> impl_scaffold         [condition="outcome=fail && context.failure_class=transient_infra", label="retry-infra", loop_restart=true]
+    check_scaffold -> impl_scaffold         [condition="outcome=fail && context.failure_class!=transient_infra", label="retry"]
 
     // Fanout -> 4 parallel branches
     fanout -> impl_dungeon
@@ -304,15 +307,18 @@ digraph rogue_fast {
     fanin -> impl_integration
     impl_integration -> verify_integration -> check_integration
     check_integration -> impl_qa            [condition="outcome=success"]
-    check_integration -> impl_integration   [condition="outcome=fail", label="retry", loop_restart=true]
+    check_integration -> impl_integration   [condition="outcome=fail && context.failure_class=transient_infra", label="retry-infra", loop_restart=true]
+    check_integration -> impl_integration   [condition="outcome=fail && context.failure_class!=transient_infra", label="retry"]
 
     // QA
     impl_qa -> verify_qa -> check_qa
     check_qa -> review                      [condition="outcome=success"]
-    check_qa -> impl_qa                     [condition="outcome=fail", label="retry", loop_restart=true]
+    check_qa -> impl_qa                     [condition="outcome=fail && context.failure_class=transient_infra", label="retry-infra", loop_restart=true]
+    check_qa -> impl_qa                     [condition="outcome=fail && context.failure_class!=transient_infra", label="retry"]
 
     // Final review
     review -> check_review
     check_review -> exit                    [condition="outcome=success"]
-    check_review -> impl_integration        [condition="outcome=fail", label="fix", loop_restart=true]
+    check_review -> impl_integration        [condition="outcome=fail && context.failure_class=transient_infra", label="fix-infra", loop_restart=true]
+    check_review -> impl_integration        [condition="outcome=fail && context.failure_class!=transient_infra", label="fix"]
 }
