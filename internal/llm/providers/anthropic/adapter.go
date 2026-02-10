@@ -93,7 +93,7 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	}
 	autoCache := anthropicAutoCacheEnabled(a.Name(), req.ProviderOptions)
 
-	maxTokens := 2048
+	maxTokens := 4096
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		maxTokens = *req.MaxTokens
 	}
@@ -621,7 +621,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 				}
 			case "message_delta":
 				if sr, _ := payload["stop_reason"].(string); sr != "" {
-					finish = llm.FinishReason{Reason: sr, Raw: sr}
+					finish = llm.NormalizeFinishReason("anthropic", sr)
 				}
 				if u, ok := payload["usage"].(map[string]any); ok {
 					u2 := parseUsage(u)
@@ -690,7 +690,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 					Usage:    usage,
 				}
 				if len(r.ToolCalls()) > 0 {
-					r.Finish = llm.FinishReason{Reason: "tool_calls"}
+					r.Finish = llm.FinishReason{Reason: "tool_calls", Raw: "tool_use"}
 				}
 				rp := r
 				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &r.Finish, Usage: &r.Usage, Response: &rp})
@@ -1061,13 +1061,10 @@ func fromAnthropicResponse(provider string, raw map[string]any, requestedModel s
 
 	r.Message = msg
 	if len(r.ToolCalls()) > 0 {
-		r.Finish = llm.FinishReason{Reason: "tool_calls"}
+		r.Finish = llm.FinishReason{Reason: "tool_calls", Raw: "tool_use"}
 	} else {
-		if sr, _ := raw["stop_reason"].(string); sr != "" {
-			r.Finish = llm.FinishReason{Reason: sr}
-		} else {
-			r.Finish = llm.FinishReason{Reason: "stop"}
-		}
+		sr, _ := raw["stop_reason"].(string)
+		r.Finish = llm.NormalizeFinishReason("anthropic", sr)
 	}
 
 	if u, ok := raw["usage"].(map[string]any); ok {

@@ -1489,6 +1489,120 @@ func TestAdapter_UsageCacheTokens_Mapped(t *testing.T) {
 	}
 }
 
+func TestAdapter_Complete_DefaultMaxTokens_Is4096(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "msg_1",
+  "model": "claude-test",
+  "content": [{"type":"text","text":"ok"}],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 1, "output_tokens": 1}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := a.Complete(ctx, llm.Request{
+		Model:    "claude-test",
+		Messages: []llm.Message{llm.User("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	mt, ok := gotBody["max_tokens"].(float64)
+	if !ok {
+		t.Fatalf("max_tokens not found or not a number: %#v", gotBody["max_tokens"])
+	}
+	if int(mt) != 4096 {
+		t.Fatalf("max_tokens: got %d want 4096", int(mt))
+	}
+}
+
+func TestAdapter_Complete_FinishReason_Normalized(t *testing.T) {
+	cases := []struct {
+		name       string
+		stopReason string
+		wantReason string
+		wantRaw    string
+	}{
+		{"end_turn", "end_turn", "stop", "end_turn"},
+		{"stop_sequence", "stop_sequence", "stop", "stop_sequence"},
+		{"max_tokens", "max_tokens", "length", "max_tokens"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{
+  "id": "msg_1",
+  "model": "claude-test",
+  "content": [{"type":"text","text":"ok"}],
+  "stop_reason": %q,
+  "usage": {"input_tokens": 1, "output_tokens": 1}
+}`, tc.stopReason)
+			}))
+			t.Cleanup(srv.Close)
+
+			a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			resp, err := a.Complete(ctx, llm.Request{Model: "claude-test", Messages: []llm.Message{llm.User("hi")}})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if resp.Finish.Reason != tc.wantReason {
+				t.Fatalf("Finish.Reason = %q, want %q", resp.Finish.Reason, tc.wantReason)
+			}
+			if resp.Finish.Raw != tc.wantRaw {
+				t.Fatalf("Finish.Raw = %q, want %q", resp.Finish.Raw, tc.wantRaw)
+			}
+		})
+	}
+}
+
+func TestAdapter_Complete_FinishReason_ToolUse_Normalized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "msg_1",
+  "model": "claude-test",
+  "content": [{"type":"tool_use","id":"t1","name":"get_weather","input":{"n":1}}],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 1, "output_tokens": 1}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := a.Complete(ctx, llm.Request{Model: "claude-test", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Finish.Reason != "tool_calls" {
+		t.Fatalf("Finish.Reason = %q, want %q", resp.Finish.Reason, "tool_calls")
+	}
+	if resp.Finish.Raw != "tool_use" {
+		t.Fatalf("Finish.Raw = %q, want %q", resp.Finish.Raw, "tool_use")
+	}
+}
+
 func TestAdapter_KimiComplete_UsesStreamingTransportAndMinMaxTokens(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
