@@ -120,6 +120,7 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
+    {"id": "openai/gpt-5.2"},
     {"id": "anthropic/claude-opus-4-6"}
   ]
 }`)
@@ -143,6 +144,51 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 	report := mustReadPreflightReport(t, logsRoot)
 	if report.Summary.Fail == 0 {
 		t.Fatalf("expected preflight report with failure summary, got %+v", report.Summary)
+	}
+}
+
+func TestRunWithConfig_WarnsAndContinues_WhenProviderNotInCatalog(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	t.Setenv("CEREBRAS_API_KEY", "k-cerebras")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "openai/gpt-5.2"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"cerebras": BackendAPI,
+	})
+	dot := singleProviderDot("cerebras", "zai-glm-4.7")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-warn-uncovered-provider", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "not present in run catalog") {
+		t.Fatalf("expected catalog validation to be skipped for provider not in catalog, got %v", err)
+	}
+	report := mustReadPreflightReport(t, logsRoot)
+	if report.Summary.Fail != 0 {
+		t.Fatalf("expected no preflight failures for provider not in catalog, got %+v", report.Summary)
+	}
+	if report.Summary.Warn == 0 {
+		t.Fatalf("expected warn check for uncovered provider in preflight report, got %+v", report.Summary)
+	}
+	foundWarn := false
+	for _, check := range report.Checks {
+		if check.Name == "provider_model_catalog" && check.Provider == "cerebras" && check.Status == "warn" {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Fatalf("expected provider_model_catalog warn check for cerebras in preflight report")
 	}
 }
 

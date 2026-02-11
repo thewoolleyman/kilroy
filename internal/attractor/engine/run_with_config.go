@@ -160,7 +160,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
-	if err := validateProviderModelPairs(g, runtimes, catalog, opts); err != nil {
+	catalogChecks, catalogErr := validateProviderModelPairs(g, runtimes, catalog, opts)
+	if catalogErr != nil {
 		report := &providerPreflightReport{
 			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 			CLIProfile:          normalizedCLIProfile(cfg),
@@ -169,15 +170,13 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 			CapabilityProbeMode: capabilityProbeMode(),
 			PromptProbeMode:     promptProbeMode(cfg),
 		}
-		report.addCheck(providerPreflightCheck{
-			Name:    "provider_model_catalog",
-			Status:  preflightStatusFail,
-			Message: err.Error(),
-		})
+		for _, c := range catalogChecks {
+			report.addCheck(c)
+		}
 		_ = writePreflightReport(opts.LogsRoot, report)
-		return nil, err
+		return nil, catalogErr
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog); err != nil {
+	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
 		return nil, err
 	}
 
@@ -235,10 +234,12 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	return res, nil
 }
 
-func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) error {
+func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) ([]providerPreflightCheck, error) {
 	if g == nil || catalog == nil {
-		return nil
+		return nil, nil
 	}
+	var checks []providerPreflightCheck
+	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {
 		if n == nil || n.Shape() != "box" {
 			continue
@@ -250,7 +251,7 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 		}
 		rt, ok := runtimes[provider]
 		if !ok {
-			return fmt.Errorf("preflight: provider %s missing runtime definition", provider)
+			return checks, fmt.Errorf("preflight: provider %s missing runtime definition", provider)
 		}
 		backend := rt.Backend
 		if backend != BackendCLI && backend != BackendAPI {
@@ -259,11 +260,33 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 		if _, forced := forceModelForProvider(opts.ForceModels, provider); forced {
 			continue
 		}
+		if !modeldb.CatalogCoversProvider(catalog, provider) {
+			if !warnedUncovered[provider] {
+				warnedUncovered[provider] = true
+				checks = append(checks, providerPreflightCheck{
+					Name:     "provider_model_catalog",
+					Provider: provider,
+					Status:   preflightStatusWarn,
+					Message:  fmt.Sprintf("model validation skipped: provider %s not in catalog (prompt probe will validate)", provider),
+					Details: map[string]any{
+						"model":   modelID,
+						"backend": string(backend),
+					},
+				})
+			}
+			continue
+		}
 		if !modeldb.CatalogHasProviderModel(catalog, provider, modelID) {
-			return fmt.Errorf("preflight: llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID)
+			checks = append(checks, providerPreflightCheck{
+				Name:     "provider_model_catalog",
+				Provider: provider,
+				Status:   preflightStatusFail,
+				Message:  fmt.Sprintf("llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID),
+			})
+			return checks, fmt.Errorf("preflight: llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID)
 		}
 	}
-	return nil
+	return checks, nil
 }
 
 func loadCatalogForRun(path string) (*modeldb.Catalog, error) {

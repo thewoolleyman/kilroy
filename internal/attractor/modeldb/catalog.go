@@ -12,6 +12,12 @@ type Catalog struct {
 	Path   string
 	SHA256 string
 	Models map[string]ModelEntry
+
+	// CoveredProviders is the set of normalized provider keys that have at
+	// least one model entry in this catalog. Populated at load time so callers
+	// can distinguish "model not found for a known provider" from "catalog has
+	// no data for this provider at all."
+	CoveredProviders map[string]bool
 }
 
 type ModelEntry struct {
@@ -27,6 +33,17 @@ type ModelEntry struct {
 
 	InputCostPerToken  *float64
 	OutputCostPerToken *float64
+}
+
+// CatalogCoversProvider returns true when the catalog was loaded from a source
+// that includes at least one model for the given provider. A false return means
+// the catalog cannot validate models for this provider — it has no opinion, not
+// that the provider is invalid.
+func CatalogCoversProvider(c *Catalog, provider string) bool {
+	if c == nil || len(c.CoveredProviders) == 0 {
+		return false
+	}
+	return c.CoveredProviders[modelmeta.NormalizeProvider(provider)]
 }
 
 // CatalogHasProviderModel returns true when the catalog contains the given

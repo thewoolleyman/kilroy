@@ -1,6 +1,9 @@
 package modeldb
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestCatalogHasProviderModel_AcceptsCanonicalAndProviderRelativeIDs(t *testing.T) {
 	c := &Catalog{Models: map[string]ModelEntry{
@@ -13,6 +16,59 @@ func TestCatalogHasProviderModel_AcceptsCanonicalAndProviderRelativeIDs(t *testi
 	if !CatalogHasProviderModel(c, "openai", "openai/gpt-5") {
 		t.Fatalf("expected canonical openai model id to resolve")
 	}
+}
+
+func TestCatalogCoversProvider_TrueForCoveredProvider(t *testing.T) {
+	c := &Catalog{CoveredProviders: map[string]bool{"openai": true, "anthropic": true}}
+	if !CatalogCoversProvider(c, "openai") {
+		t.Fatalf("expected CatalogCoversProvider=true for openai")
+	}
+	if !CatalogCoversProvider(c, "anthropic") {
+		t.Fatalf("expected CatalogCoversProvider=true for anthropic")
+	}
+}
+
+func TestCatalogCoversProvider_FalseForUncoveredProvider(t *testing.T) {
+	c := &Catalog{CoveredProviders: map[string]bool{"openai": true}}
+	if CatalogCoversProvider(c, "cerebras") {
+		t.Fatalf("expected CatalogCoversProvider=false for cerebras (not in catalog)")
+	}
+}
+
+func TestCatalogCoversProvider_ResolvesAliases(t *testing.T) {
+	c := &Catalog{CoveredProviders: map[string]bool{"kimi": true, "zai": true}}
+	if !CatalogCoversProvider(c, "moonshot") {
+		t.Fatalf("expected CatalogCoversProvider to resolve moonshot alias to kimi")
+	}
+	if CatalogCoversProvider(c, "cerebras-ai") {
+		t.Fatalf("expected CatalogCoversProvider=false for cerebras-ai (cerebras not covered)")
+	}
+}
+
+func TestLoadCatalogFromOpenRouterJSON_PopulatesCoveredProviders(t *testing.T) {
+	path := t.TempDir() + "/catalog.json"
+	data := `{"data":[{"id":"openai/gpt-5"},{"id":"z-ai/glm-4.7"}]}`
+	if err := writeTestFile(t, path, data); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCatalogFromOpenRouterJSON(path)
+	if err != nil {
+		t.Fatalf("LoadCatalogFromOpenRouterJSON: %v", err)
+	}
+	if !c.CoveredProviders["openai"] {
+		t.Fatalf("expected CoveredProviders to include openai")
+	}
+	if !c.CoveredProviders["zai"] {
+		t.Fatalf("expected CoveredProviders to include zai (from z-ai prefix)")
+	}
+	if c.CoveredProviders["cerebras"] {
+		t.Fatalf("expected CoveredProviders to NOT include cerebras")
+	}
+}
+
+func writeTestFile(t *testing.T, path string, content string) error {
+	t.Helper()
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func TestCatalogHasProviderModel_AcceptsOpenRouterProviderPrefixes(t *testing.T) {

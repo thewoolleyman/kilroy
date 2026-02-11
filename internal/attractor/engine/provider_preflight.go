@@ -78,7 +78,7 @@ type preflightAPIPromptProbeResult struct {
 	PolicyHint string
 }
 
-func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, catalog *modeldb.Catalog) (*providerPreflightReport, error) {
+func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, catalog *modeldb.Catalog, catalogChecks []providerPreflightCheck) (*providerPreflightReport, error) {
 	report := &providerPreflightReport{
 		GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		CLIProfile:          normalizedCLIProfile(cfg),
@@ -86,6 +86,9 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
 		CapabilityProbeMode: capabilityProbeMode(),
 		PromptProbeMode:     promptProbeMode(cfg),
+	}
+	for _, c := range catalogChecks {
+		report.addCheck(c)
 	}
 	defer func() {
 		_ = writePreflightReport(opts.LogsRoot, report)

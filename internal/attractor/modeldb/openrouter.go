@@ -48,6 +48,7 @@ func LoadCatalogFromOpenRouterJSON(path string) (*Catalog, error) {
 		return nil, err
 	}
 
+	covered := map[string]bool{}
 	models := make(map[string]ModelEntry, len(payload.Data))
 	for _, m := range payload.Data {
 		id := strings.TrimSpace(m.ID)
@@ -55,6 +56,9 @@ func LoadCatalogFromOpenRouterJSON(path string) (*Catalog, error) {
 			continue
 		}
 		provider := modelmeta.ProviderFromModelID(id)
+		if provider != "" {
+			covered[provider] = true
+		}
 		ctxWindow := m.ContextLength
 		if ctxWindow == 0 {
 			ctxWindow = m.TopProvider.ContextLength
@@ -82,8 +86,9 @@ func LoadCatalogFromOpenRouterJSON(path string) (*Catalog, error) {
 		return nil, fmt.Errorf("openrouter model catalog is empty: %s", path)
 	}
 	return &Catalog{
-		Path:   path,
-		SHA256: sha,
-		Models: models,
+		Path:             path,
+		SHA256:           sha,
+		Models:           models,
+		CoveredProviders: covered,
 	}, nil
 }
