@@ -60,8 +60,13 @@ func buildCLIArgs(opts Options) (string, []string, string, error) {
 	}
 
 	// Give Claude read access to the repo without running inside it.
+	// Resolve to absolute because Claude runs from a temp dir.
 	if opts.RepoPath != "" {
-		args = append(args, "--add-dir", opts.RepoPath)
+		absRepo, err := filepath.Abs(opts.RepoPath)
+		if err != nil {
+			return "", nil, "", fmt.Errorf("resolving repo path: %w", err)
+		}
+		args = append(args, "--add-dir", absRepo)
 	}
 
 	if opts.SkillPath != "" {

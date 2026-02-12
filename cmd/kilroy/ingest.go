@@ -108,6 +108,7 @@ func attractorIngest(args []string) {
 		fmt.Fprintln(os.Stderr, "  --model         LLM model (default: claude-sonnet-4-5)")
 		fmt.Fprintln(os.Stderr, "  --skill         Path to skill .md file (default: auto-detect)")
 		fmt.Fprintln(os.Stderr, "  --repo          Repository root (default: cwd)")
+		fmt.Fprintln(os.Stderr, "  --max-turns     Max agentic turns for Claude (default: 15)")
 		fmt.Fprintln(os.Stderr, "  --no-validate   Skip .dot validation")
 		os.Exit(1)
 	}

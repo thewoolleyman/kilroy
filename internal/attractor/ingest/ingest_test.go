@@ -73,6 +73,25 @@ func TestBuildCLIArgs(t *testing.T) {
 				assertNotContains(t, args, "--append-system-prompt")
 			},
 		},
+		{
+			name: "relative repo path resolved to absolute",
+			opts: Options{
+				Model:        "claude-sonnet-4-5",
+				Requirements: "Build something",
+				RepoPath:     "../relative/path",
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				for i, a := range args {
+					if a == "--add-dir" && i+1 < len(args) {
+						if !filepath.IsAbs(args[i+1]) {
+							t.Errorf("--add-dir value %q is not absolute", args[i+1])
+						}
+						return
+					}
+				}
+				t.Error("--add-dir not found in args")
+			},
+		},
 	}
 
 	for _, tt := range tests {
