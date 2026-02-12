@@ -60,6 +60,15 @@ func includeInRunArchive(rel string, _ fs.DirEntry) bool {
 	return true
 }
 
+// archiveStageDir creates a stage.tgz tarball for the given node's log directory.
+func (e *Engine) archiveStageDir(nodeID string) {
+	stageDir := filepath.Join(e.LogsRoot, nodeID)
+	stageTar := filepath.Join(stageDir, "stage.tgz")
+	if _, err := os.Stat(stageTar); err != nil {
+		_ = writeTarGz(stageTar, stageDir, includeInStageArchive)
+	}
+}
+
 func writeTarGz(dstPath string, srcDir string, include tarFilter) error {
 	srcDir = filepath.Clean(srcDir)
 	if srcDir == "." || srcDir == string(filepath.Separator) {

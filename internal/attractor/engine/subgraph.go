@@ -92,6 +92,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		if err != nil {
 			return parallelBranchResult{}, err
 		}
+		eng.archiveStageDir(node.ID)
 		eng.cxdbStageFinished(ctx, node, out)
 		if err := ctx.Err(); err != nil {
 			return canceledReturn(node.ID, out, err)

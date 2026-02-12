@@ -457,6 +457,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}
 			nodeOutcomes[node.ID] = out
 			completed = append(completed, node.ID)
+			e.archiveStageDir(node.ID)
 			e.cxdbStageFinished(ctx, node, out)
 			if err := runContextError(ctx); err != nil {
 				return nil, err
@@ -496,6 +497,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		if err != nil {
 			return nil, err
 		}
+		e.archiveStageDir(node.ID)
 		e.cxdbStageFinished(ctx, node, out)
 		if err := runContextError(ctx); err != nil {
 			return nil, err
@@ -1331,19 +1333,10 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 			_ = final.Save(primaryPath)
 		}
 	}
-	if e.CXDB != nil && strings.TrimSpace(primaryPath) != "" {
-		_, _ = e.CXDB.PutArtifactFile(ctx, "", "final.json", primaryPath)
-	}
-
 	archiveRoot := strings.TrimSpace(e.LogsRoot)
 	if archiveRoot != "" {
 		runTar := filepath.Join(archiveRoot, "run.tgz")
 		_ = writeTarGz(runTar, archiveRoot, includeInRunArchive)
-		if e.CXDB != nil {
-			if _, err := os.Stat(runTar); err == nil {
-				_, _ = e.CXDB.PutArtifactFile(ctx, "", "run.tgz", runTar)
-			}
-		}
 	}
 
 	e.terminalOutcomePersisted = true
