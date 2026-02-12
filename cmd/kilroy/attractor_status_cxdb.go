@@ -132,9 +132,7 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 	switch turn.TypeID {
 	case "com.kilroy.attractor.RunStarted":
 		goal := payloadStr(p, "goal")
-		if len(goal) > 80 {
-			goal = goal[:77] + "..."
-		}
+		goal = truncateRunes(goal, 80)
 		return fmt.Sprintf("%s | RUN_STARTED            | %s", ts, goal)
 
 	case "com.kilroy.attractor.StageStarted":
@@ -149,15 +147,11 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 		status := payloadStr(p, "status")
 		line := fmt.Sprintf("%s | STAGE_FINISHED         | %s | %s", ts, nodeID, status)
 		if reason := payloadStr(p, "failure_reason"); reason != "" {
-			if len(reason) > 100 {
-				reason = reason[:97] + "..."
-			}
+			reason = truncateRunes(reason, 100)
 			line += " | " + reason
 		}
 		if notes := payloadStr(p, "notes"); notes != "" {
-			if len(notes) > 100 {
-				notes = notes[:97] + "..."
-			}
+			notes = truncateRunes(notes, 100)
 			line += "\n" + strings.Repeat(" ", 11) + "notes: " + notes
 		}
 		return line
@@ -165,10 +159,7 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 	case "com.kilroy.attractor.ToolCall":
 		toolName := payloadStr(p, "tool_name")
 		callID := payloadStr(p, "call_id")
-		argsJSON := payloadStr(p, "arguments_json")
-		if len(argsJSON) > 120 {
-			argsJSON = argsJSON[:117] + "..."
-		}
+		argsJSON := truncateRunes(payloadStr(p, "arguments_json"), 120)
 		if argsJSON != "" {
 			return fmt.Sprintf("%s | TOOL_CALL              | %s [%s] %s", ts, toolName, callID, argsJSON)
 		}
@@ -178,10 +169,7 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 		toolName := payloadStr(p, "tool_name")
 		callID := payloadStr(p, "call_id")
 		isErr := payloadStr(p, "is_error")
-		output := payloadStr(p, "output")
-		if len(output) > 120 {
-			output = output[:117] + "..."
-		}
+		output := truncateRunes(payloadStr(p, "output"), 120)
 		status := "ok"
 		if isErr == "true" {
 			status = "ERROR"
@@ -223,10 +211,7 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 		inTok := payloadStr(p, "input_tokens")
 		outTok := payloadStr(p, "output_tokens")
 		toolCount := payloadStr(p, "tool_use_count")
-		text := payloadStr(p, "text")
-		if len(text) > 120 {
-			text = text[:117] + "..."
-		}
+		text := truncateRunes(payloadStr(p, "text"), 120)
 		line := fmt.Sprintf("%s | ASSISTANT_MSG          | %s [in=%s out=%s]", ts, model, inTok, outTok)
 		if toolCount != "" && toolCount != "0" {
 			line += fmt.Sprintf(" (%s tools)", toolCount)
@@ -237,10 +222,7 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 		return line
 
 	case "com.kilroy.attractor.Prompt":
-		text := payloadStr(p, "text")
-		if len(text) > 120 {
-			text = text[:117] + "..."
-		}
+		text := truncateRunes(payloadStr(p, "text"), 120)
 		return fmt.Sprintf("%s | PROMPT                 | %s\n%s%s", ts, nodeID, strings.Repeat(" ", 11), text)
 
 	case "com.kilroy.attractor.RunFailed":
@@ -273,6 +255,15 @@ func formatCXDBTimestamp(p map[string]any) string {
 		}
 	}
 	return "         "
+}
+
+// truncateRunes truncates s to at most maxRunes runes, appending "..." if truncated.
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func payloadStr(p map[string]any, key string) string {

@@ -555,11 +555,12 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	}, nil
 }
 
-func truncate(s string, n int) string {
-	if n <= 0 || len(s) <= n {
+func truncate(s string, maxRunes int) string {
+	runes := []rune(s)
+	if maxRunes <= 0 || len(runes) <= maxRunes {
 		return s
 	}
-	return s[:n]
+	return string(runes[:maxRunes])
 }
 
 func writeDiffPatch(stageDir string, worktreeDir string) error {
