@@ -342,3 +342,38 @@ digraph G {
 		t.Fatalf("parallel_results.json should NOT exist for single-edge traversal")
 	}
 }
+
+func TestRun_DifferentConditions_NoFanOut(t *testing.T) {
+	repo := initImplicitFanOutTestRepo(t)
+
+	dotSrc := []byte(`
+digraph G {
+  graph [goal="test no fan-out on different conditions"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  check [shape=diamond]
+  pass [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="pass"]
+  fail_path [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="fail_path"]
+
+  start -> check
+  check -> pass      [condition="outcome=success"]
+  check -> fail_path [condition="outcome=fail"]
+  pass -> exit
+  fail_path -> exit
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := Run(ctx, dotSrc, RunOptions{RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %q want %q", res.FinalStatus, runtime.FinalSuccess)
+	}
+	// No parallel_results.json — only one condition matches.
+	resultsPath := filepath.Join(res.LogsRoot, "check", "parallel_results.json")
+	if _, err := os.Stat(resultsPath); err == nil {
+		t.Fatalf("parallel_results.json should NOT exist — different conditions, not fan-out")
+	}
+}
