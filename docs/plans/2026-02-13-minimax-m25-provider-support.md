@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go, existing `openaicompat` adapter, `providerspec` package.
 
+**Prerequisites:** This plan should be executed on the `minimax-m25-support` branch, which includes a committed fix (`fcbac54d`) for a pre-existing engine compile break (`isSignatureTrackedFailureClass` undefined in `engine.go:527`). Without this fix, the engine package won't compile and Tasks 3, 5, 7, and 9 will fail. If implementing on a different branch, cherry-pick `fcbac54d` first.
+
 **Key Minimax API facts (from research):**
 - Base URL: `https://api.minimax.io`
 - Path: `/v1/chat/completions`
@@ -244,9 +246,9 @@ take effect for openaicompat providers."
 **Files:**
 - Modify: `internal/attractor/modeldb/pinned/openrouter_models.json`
 
-**Step 1: Add M2.5 entries to the pinned catalog**
+**Step 1: Add M2.5 entry to the pinned catalog**
 
-Add the following two entries to the `"data"` array in the pinned catalog JSON, after the existing `minimax/minimax-m2.1` entry (around line 6159). Follow the exact format of existing entries:
+Add the following entry to the `"data"` array in the pinned catalog JSON, after the existing `minimax/minimax-m2.1` entry (around line 6159). Follow the exact format of existing entries:
 
 ```json
 {
@@ -471,7 +473,81 @@ to test catalog and RunWithConfig acceptance test cases."
 
 ---
 
-### Task 8: Run Full Test Suite and Final Verification
+### Task 8: Update Documentation Provider Lists
+
+**Context:** Several docs hardcode the list of supported providers. Add minimax to each.
+
+**Files:**
+- Modify: `README.md` (lines 41, 252-253, 255, 275-277, 332)
+- Modify: `docs/strongdm/attractor/README.md` (lines 48-50, 61)
+
+**Step 1: Update `README.md`**
+
+At line 41 (provider support table row), add Minimax:
+```
+| Provider support | Conceptual provider abstraction | Provider plug-in runtime with built-ins: OpenAI, Anthropic, Google, Kimi, ZAI, Minimax |
+```
+
+At line 252, add minimax:
+```
+- Built-ins include `openai`, `anthropic`, `google`, `kimi`, `zai`, `cerebras`, and `minimax`.
+```
+
+At line 253, add minimax alias:
+```
+- Provider aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `cerebras-ai` -> `cerebras`, `minimax-ai` -> `minimax`.
+```
+
+At line 255, add minimax:
+```
+- `kimi`, `zai`, `cerebras`, and `minimax` are API-only in this release.
+```
+
+At line 277, add after Cerebras:
+```
+- Minimax: `MINIMAX_API_KEY`
+```
+
+At line 332, add minimax:
+```
+Supported providers are `openai`, `anthropic`, `google`, `kimi`, `zai`, and `minimax` (aliases accepted).
+```
+
+**Step 2: Update `docs/strongdm/attractor/README.md`**
+
+At line 48, add minimax:
+```
+  - Built-ins: `openai`, `anthropic`, `google`, `kimi`, `zai`, `minimax`.
+```
+
+At line 49, add minimax alias:
+```
+  - Built-in aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `minimax-ai` -> `minimax`.
+```
+
+At line 50, add minimax:
+```
+  - `kimi`, `zai`, and `minimax` are API-only in this release (`kimi` uses `anthropic_messages`; `zai` and `minimax` use `openai_chat_completions`).
+```
+
+At line 61, add minimax:
+```
+    - Supported canonical providers are `openai`, `anthropic`, `google`, `kimi`, `zai`, `minimax` (aliases accepted and canonicalized).
+```
+
+**Step 3: Commit**
+
+```
+git add README.md docs/strongdm/attractor/README.md
+git commit -m "docs: add minimax to supported provider lists
+
+Update README.md and docs/strongdm/attractor/README.md to include
+minimax in provider lists, aliases, and API key env vars."
+```
+
+---
+
+### Task 9: Run Full Test Suite and Final Verification
 
 **Step 1: Run all affected test packages**
 
@@ -501,14 +577,17 @@ If all tests pass with no issues, no commit needed here.
 | `internal/llm/provider_execution_policy_test.go` | Add `"minimax"` to no-special-policy list |
 | `internal/attractor/engine/run_with_config_test.go` | Add minimax to test catalog and `TestRunWithConfig_AcceptsKimiAndZaiAPIProviders` |
 | `internal/attractor/engine/kimi_zai_api_integration_test.go` | Add minimax case to `TestKimiCodingAndZai_APIIntegration` |
+| `README.md` | Add minimax to provider lists, aliases, env vars |
+| `docs/strongdm/attractor/README.md` | Add minimax to provider lists, aliases |
 
 ## What We Don't Need to Change
 
 - **No new adapter package** — Minimax uses standard OpenAI chat completions format, handled by `openaicompat`.
-- **No changes to `llmclient/env.go`** — ZAI and Cerebras aren't imported there either; the `openaicompat` adapter is created dynamically by `api_client_from_runtime.go` based on the protocol in the provider spec.
+- **No changes to `llmclient/env.go`** — The env registry (`llmclient/env.go`) only imports `openai`, `anthropic`, and `google`. Kimi, ZAI, and Cerebras are also absent — ALL openaicompat providers are created dynamically by `api_client_from_runtime.go` based on the protocol in the provider spec, not via the env registry.
 - **No execution policy** — Minimax doesn't require forced streaming or minimum token counts.
 - **No new protocol constant** — `ProtocolOpenAIChatCompletions` already exists.
 - **No node-level `provider_options` wiring** — The engine's codergen router (`codergen_router.go:175`) does not currently read node-level `provider_options` attributes into `llm.Request.ProviderOptions`. This is a pre-existing limitation shared by all providers, not a Minimax-specific gap.
+- **No resume-path support for openaicompat providers** — The `resume.go:151` path calls `NewCodergenRouter(cfg, catalog)` without provider runtimes, so `ensureAPIClient()` falls back to `llmclient.NewFromEnv()` (`codergen_router.go:145`), which only knows about openai/anthropic/google. This means resumed runs cannot route to minimax (or kimi, zai, cerebras). This is a **pre-existing architectural limitation** shared by ALL openaicompat providers — adding minimax does not make it worse. Fixing this requires changes to the resume path to re-resolve provider runtimes from the saved config, which is out of scope for this plan.
 
 ## Usage After Implementation
 
@@ -547,4 +626,9 @@ This plan revision addresses all 5 major issues identified by the independent GP
 ### Second Review Fixes
 
 6. **Removed non-existent model variant:** Only `minimax/minimax-m2.5` exists on OpenRouter and the Minimax API. Removed all references to any other M2.5 variants from catalog entries, usage examples, and commit messages.
-7. **Fixed pre-existing engine compile break:** Applied `isSignatureTrackedFailureClass` function definition and related `failureClassStructural` changes to the worktree (these existed as uncommitted changes in main). Engine package now compiles and all plan test steps are executable.
+7. **Fixed pre-existing engine compile break (commit `fcbac54d` on this branch):** Applied `isSignatureTrackedFailureClass` function definition and related `failureClassStructural` changes. These changes are committed on the `minimax-m25-support` branch and are a prerequisite for all engine-package test steps. If implementing from a different branch, cherry-pick `fcbac54d` first.
+
+### Third Review Fixes
+
+8. **Documented resume-path limitation:** The resume path (`resume.go:151`) does not re-resolve provider runtimes, so `ensureAPIClient()` falls back to `llmclient.NewFromEnv()` which only supports openai/anthropic/google. This is a pre-existing limitation shared by ALL openaicompat providers (kimi, zai, cerebras) — not specific to minimax.
+9. **Added documentation update task (Task 8):** Provider lists in `README.md` and `docs/strongdm/attractor/README.md` now get updated with minimax.
