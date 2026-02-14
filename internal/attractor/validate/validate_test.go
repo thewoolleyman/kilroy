@@ -233,6 +233,35 @@ digraph G {
 	assertHasRule(t, diags, "escalation_models_syntax", SeverityWarning)
 }
 
+func TestValidate_ShapeAliases_DownstreamLintsFireForCircleAndDoublecircle(t *testing.T) {
+	// circle=start, doublecircle=exit aliases should be recognized by downstream lints
+	// (start_no_incoming, exit_no_outgoing, reachability) not just lintStartNode/lintExitNode.
+	g, err := dot.Parse([]byte(`
+digraph G {
+  s [shape=circle]
+  e [shape=doublecircle]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  s -> a -> e
+  a -> s
+  e -> a
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	// Should fire start_no_incoming (a->s) and exit_no_outgoing (e->a).
+	assertHasRule(t, diags, "start_no_incoming", SeverityError)
+	assertHasRule(t, diags, "exit_no_outgoing", SeverityError)
+
+	// Reachability should also work — all nodes reachable, so no reachability errors.
+	for _, d := range diags {
+		if d.Rule == "reachability" {
+			t.Fatalf("unexpected reachability error for fully connected alias-shaped graph: %+v", d)
+		}
+	}
+}
+
 func assertHasRule(t *testing.T, diags []Diagnostic, rule string, sev Severity) {
 	t.Helper()
 	for _, d := range diags {
