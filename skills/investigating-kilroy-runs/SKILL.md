@@ -109,6 +109,74 @@ To inspect fields for a specific event type, run:
 jq -c 'select(.event=="stage_attempt_end")' "$RUN_ROOT/progress.ndjson" | head -n 5
 ```
 
+## Noise-to-Signal Query Patterns (Observed)
+
+These patterns come from real investigation mistakes where the first query produced noisy output and the replacement query produced useful signal.
+
+1. Raw tail was dominated by heartbeats.
+
+```bash
+# noisy
+tail -n 80 "$RUN_ROOT/progress.ndjson"
+
+# higher-signal
+jq -rc 'select(.event!="branch_heartbeat") | {ts,event,node_id,status,branch_key,branch_event,branch_status,branch_failure_reason}' \
+  "$RUN_ROOT/progress.ndjson" | tail -n 80
+```
+
+2. Event frequency counts gave little "what is happening now" signal.
+
+```bash
+# broad but low immediate diagnostic value
+jq -r '.event' "$RUN_ROOT/progress.ndjson" | sort | uniq -c | sort -nr
+
+# better for current state
+jq -rc 'select(.event!="branch_heartbeat") | {ts,event,node_id,status,branch_key,branch_event,branch_status,branch_failure_reason}' \
+  "$RUN_ROOT/progress.ndjson" | tail -n 40
+```
+
+3. Broad history scans mixed unrelated commits into run analysis.
+
+```bash
+# noisy across repo history
+git rev-list HEAD | head -n 200
+
+# scoped to this run's commits
+git log --oneline --grep "$RUN_ID" -n 80
+```
+
+4. Full commit stats pulled in `target/` and artifact churn.
+
+```bash
+# noisy if commit touched build outputs
+git show --stat <commit>
+
+# source-focused
+git show --stat <commit> -- demo/rogue/rogue-wasm/src
+```
+
+5. Progress checks can fail on pipe/SIGPIPE mechanics instead of run state.
+
+```bash
+# brittle in strict pipefail shells
+set -euo pipefail
+jq -rc 'select(.event!="branch_heartbeat")' "$RUN_ROOT/progress.ndjson" | head -n 20
+
+# safer wrapper for quick probes
+set -euo pipefail
+jq -rc 'select(.event!="branch_heartbeat")' "$RUN_ROOT/progress.ndjson" | head -n 20 || true
+```
+
+6. "Is code still improving?" was unclear without a last-meaningful-change anchor.
+
+```bash
+# activity-only view
+git log --oneline --grep "$RUN_ID" -n 30
+
+# source progress since last meaningful implementation commit
+git diff --stat <last_meaningful_commit>..HEAD -- demo/rogue/rogue-wasm/src
+```
+
 ## Resolve Terminal-vs-Live Conflicts
 
 To handle cases where `final.json` exists but `progress.ndjson` still changes:
