@@ -321,12 +321,71 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
+	// Implicit fan-out: mirror forward-path logic for multi-edge convergence.
+	allEdges, edgeErr := selectAllEligibleEdges(eng.Graph, lastNodeID, lastOutcome, eng.Context)
+	if edgeErr != nil {
+		return nil, edgeErr
+	}
+	if len(allEdges) > 1 {
+		joinID, joinErr := findJoinNode(eng.Graph, allEdges)
+		if joinErr == nil && joinID != "" {
+			exec := &Execution{
+				Graph:       eng.Graph,
+				Context:     eng.Context,
+				LogsRoot:    eng.LogsRoot,
+				WorktreeDir: eng.WorktreeDir,
+				Engine:      eng,
+			}
+			results, baseSHA, dispatchErr := dispatchParallelBranches(ctx, exec, lastNodeID, allEdges, joinID)
+			if dispatchErr != nil {
+				return nil, dispatchErr
+			}
+			stageDir := filepath.Join(eng.LogsRoot, lastNodeID)
+			_ = os.MkdirAll(stageDir, 0o755)
+			_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
+
+			eng.Context.ApplyUpdates(map[string]any{
+				"parallel.join_node": joinID,
+				"parallel.results":   results,
+			})
+			eng.appendProgress(map[string]any{
+				"event":       "implicit_fan_out",
+				"source_node": lastNodeID,
+				"join_node":   joinID,
+				"branches":    len(results),
+				"base_sha":    baseSHA,
+			})
+
+			eng.incomingEdge = nil
+			res, err = eng.runLoop(ctx, joinID, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+			if err != nil {
+				return nil, err
+			}
+			if startup != nil {
+				res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
+			}
+			return res, nil
+		}
+	}
+
 	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome))
 	if err != nil {
 		return nil, err
 	}
 	if nextHop == nil || nextHop.Edge == nil {
 		if lastOutcome.Status == runtime.StatusFail {
+			// Mirror forward-path fallback: try the retry_target chain before dying.
+			retryTarget := resolveRetryTarget(eng.Graph, lastNodeID)
+			if retryTarget != "" {
+				eng.appendProgress(map[string]any{
+					"event":          "no_matching_fail_edge_fallback",
+					"node_id":        lastNodeID,
+					"retry_target":   retryTarget,
+					"failure_reason": lastOutcome.FailureReason,
+				})
+				eng.incomingEdge = nil
+				return eng.runLoop(ctx, retryTarget, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+			}
 			return nil, fmt.Errorf("resume: stage failed with no outgoing fail edge: %s", strings.TrimSpace(lastOutcome.FailureReason))
 		}
 		// Nothing to do; treat as completed.

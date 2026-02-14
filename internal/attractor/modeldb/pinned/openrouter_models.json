@@ -6214,6 +6214,40 @@
       "expiration_date": null
     },
     {
+      "id": "minimax/minimax-m2.5",
+      "canonical_slug": "minimax/minimax-m2.5",
+      "hugging_face_id": "",
+      "name": "MiniMax: MiniMax M2.5",
+      "created": 1771200000,
+      "description": "MiniMax M2.5 - advanced reasoning and coding model with agentic capabilities",
+      "context_length": 196608,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000012",
+        "image": "0",
+        "request": "0",
+        "input_cache_read": "0",
+        "input_cache_write": "0",
+        "web_search": "0",
+        "internal_reasoning": "0"
+      },
+      "top_provider": {
+        "context_length": 196608,
+        "max_completion_tokens": 16384,
+        "is_moderated": false
+      },
+      "supported_parameters": ["tools", "temperature", "top_p", "max_tokens", "stream", "stop"],
+      "per_request_limits": null,
+      "expiration_date": null
+    },
+    {
       "id": "mistralai/codestral-2508",
       "canonical_slug": "mistralai/codestral-2508",
       "hugging_face_id": "",

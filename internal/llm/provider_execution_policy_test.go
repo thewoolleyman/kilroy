@@ -16,7 +16,7 @@ func TestExecutionPolicy_Kimi(t *testing.T) {
 }
 
 func TestExecutionPolicy_NonKimi(t *testing.T) {
-	for _, provider := range []string{"openai", "anthropic", "google", "zai"} {
+	for _, provider := range []string{"openai", "anthropic", "google", "zai", "minimax"} {
 		t.Run(provider, func(t *testing.T) {
 			p := ExecutionPolicy(provider)
 			if p.ForceStream {

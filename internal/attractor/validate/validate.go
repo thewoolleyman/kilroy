@@ -137,7 +137,7 @@ func lintEdgeTargetsExist(g *model.Graph) []Diagnostic {
 
 func findStartNodeID(g *model.Graph) string {
 	for id, n := range g.Nodes {
-		if n != nil && n.Shape() == "Mdiamond" {
+		if n != nil && (n.Shape() == "Mdiamond" || n.Shape() == "circle") {
 			return id
 		}
 	}
@@ -151,7 +151,7 @@ func findStartNodeID(g *model.Graph) string {
 
 func findExitNodeID(g *model.Graph) string {
 	for id, n := range g.Nodes {
-		if n != nil && n.Shape() == "Msquare" {
+		if n != nil && (n.Shape() == "Msquare" || n.Shape() == "doublecircle") {
 			return id
 		}
 	}
