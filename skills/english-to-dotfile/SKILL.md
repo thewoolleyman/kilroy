@@ -189,8 +189,8 @@ STOP (interactive mode). Do not emit `.dot` until the user replies.
 
 Once the choice/overrides are known:
 - TEMPLATE-FIRST:
-  - Default to starting from the validated template dotfile at:
-    - `docs/strongdm/dot specs/consensus_task.dot`
+  - Default to starting from the validated reference template at:
+    - `skills/english-to-dotfile/reference_template.dot`
   - Treat it as the *structural* starting point (stage ordering + loop semantics), then adapt it to the requirements in this skill:
     - Keep the hill-climbing loop: DoD (if missing) → plan fan-out (3) → debate/consolidate → **single-writer implement** → review fan-out (3) → consensus → postmortem → loop back to planning.
     - Keep implementation **single-threaded** (one node touching code at a time). Use parallelism for *thinking* stages (DoD/plan/review), not for code edits.
@@ -301,7 +301,9 @@ digraph project_name {
             * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
             .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
             .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
+            .branch-a { llm_model: BRANCH_A_MODEL; llm_provider: BRANCH_A_PROVIDER; }
+            .branch-b { llm_model: BRANCH_B_MODEL; llm_provider: BRANCH_B_PROVIDER; }
+            .branch-c { llm_model: BRANCH_C_MODEL; llm_provider: BRANCH_C_PROVIDER; }
         "
     ]
 
@@ -971,7 +973,7 @@ Each fan-out branch prompt should include:
 - "Implement ONLY your assigned module files."
 28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
 29. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
-30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `docs/strongdm/dot specs/consensus_task.dot` (or another proven template) and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
+30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `skills/english-to-dotfile/reference_template.dot` and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
 31. **Setting `max_agent_turns` without production data.** Do not guess turn limits. Use `timeout` as the primary safety guard. Add `max_agent_turns` only as a secondary clamp once you have observed turn-count distributions from production runs — a wrong turn limit kills productive work and wastes every turn the agent already completed.
 
 ## Notes on Reference Dotfile Conventions
@@ -997,7 +999,9 @@ digraph linkcheck {
             * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
             .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
             .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
+            .branch-a { llm_model: BRANCH_A_MODEL; llm_provider: BRANCH_A_PROVIDER; }
+            .branch-b { llm_model: BRANCH_B_MODEL; llm_provider: BRANCH_B_PROVIDER; }
+            .branch-c { llm_model: BRANCH_C_MODEL; llm_provider: BRANCH_C_PROVIDER; }
         "
     ]
 
