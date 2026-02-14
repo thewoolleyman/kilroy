@@ -111,3 +111,41 @@ func TestCatalogHasProviderModel_AcceptsOpenRouterProviderPrefixes(t *testing.T)
 		t.Fatalf("expected zai canonical/openrouter id to match")
 	}
 }
+
+func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
+	path := t.TempDir() + "/catalog.json"
+	data := `{"data":[{
+		"id": "openai/gpt-5.3-codex-spark",
+		"context_length": 128000,
+		"architecture": {
+			"input_modalities": ["text"],
+			"output_modalities": ["text"]
+		},
+		"supported_parameters": ["max_tokens", "reasoning", "tool_choice", "tools"],
+		"top_provider": {"context_length": 128000, "max_completion_tokens": 16384},
+		"pricing": {"prompt": "0", "completion": "0"}
+	}]}`
+	if err := writeTestFile(t, path, data); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCatalogFromOpenRouterJSON(path)
+	if err != nil {
+		t.Fatalf("LoadCatalogFromOpenRouterJSON: %v", err)
+	}
+	if !CatalogHasProviderModel(c, "openai", "gpt-5.3-codex-spark") {
+		t.Fatal("expected catalog to contain openai/gpt-5.3-codex-spark")
+	}
+	entry := c.Models["openai/gpt-5.3-codex-spark"]
+	if entry.ContextWindow != 128000 {
+		t.Errorf("context_window: got %d, want 128000", entry.ContextWindow)
+	}
+	if entry.SupportsVision {
+		t.Error("expected SupportsVision=false for Spark (text-only)")
+	}
+	if !entry.SupportsTools {
+		t.Error("expected SupportsTools=true")
+	}
+	if !entry.SupportsReasoning {
+		t.Error("expected SupportsReasoning=true")
+	}
+}

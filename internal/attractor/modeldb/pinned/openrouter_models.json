@@ -10934,6 +10934,44 @@
       "expiration_date": null
     },
     {
+      "id": "openai/gpt-5.3-codex-spark",
+      "canonical_slug": "openai/gpt-5.3-codex-spark-20260212",
+      "hugging_face_id": "",
+      "name": "OpenAI: GPT-5.3-Codex-Spark",
+      "created": 1739491200,
+      "description": "GPT-5.3-Codex-Spark is a smaller, faster distillation of GPT-5.3-Codex optimized for real-time coding on Cerebras WSE-3 hardware. CLI-only (no API). 128k context, text-only, 1000+ tok/s.",
+      "context_length": 128000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "GPT",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 128000,
+        "max_completion_tokens": 16384,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "max_tokens",
+        "reasoning",
+        "tool_choice",
+        "tools"
+      ],
+      "default_parameters": {},
+      "expiration_date": null
+    },
+    {
       "id": "openai/gpt-5.2-pro",
       "canonical_slug": "openai/gpt-5.2-pro-20251211",
       "hugging_face_id": "",
