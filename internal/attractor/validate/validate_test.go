@@ -262,6 +262,114 @@ digraph G {
 	}
 }
 
+func TestValidate_GoalGateExitStatusContract_ErrorAndPromptWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target=implement]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  review_consensus [
+    shape=box,
+    goal_gate=true,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Review and decide outcome.\nWrite status JSON with outcome=pass when approved."
+  ]
+  start -> review_consensus
+  review_consensus -> exit [condition="outcome=pass"]
+  review_consensus -> implement [condition="outcome=retry"]
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "goal_gate_exit_status_contract", SeverityError)
+	assertHasRule(t, diags, "goal_gate_prompt_status_hint", SeverityWarning)
+}
+
+func TestValidate_GoalGateExitStatusContract_AllowsCanonicalSuccessOutcomes(t *testing.T) {
+	tests := []struct {
+		name         string
+		exitOutcome  string
+		promptStatus string
+	}{
+		{
+			name:         "success",
+			exitOutcome:  "success",
+			promptStatus: "success",
+		},
+		{
+			name:         "partial_success",
+			exitOutcome:  "partial_success",
+			promptStatus: "partial_success",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dotSrc := `
+digraph G {
+  graph [retry_target=implement]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  review_consensus [
+    shape=box,
+    goal_gate=true,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Review and decide outcome.\nWrite status JSON with outcome=` + tc.promptStatus + ` when approved."
+  ]
+  start -> review_consensus
+  review_consensus -> exit [condition="outcome=` + tc.exitOutcome + `"]
+  review_consensus -> implement [condition="outcome=retry"]
+  implement -> exit [condition="outcome=success"]
+}
+`
+			g, err := dot.Parse([]byte(dotSrc))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			diags := Validate(g)
+			assertNoRule(t, diags, "goal_gate_exit_status_contract")
+			assertNoRule(t, diags, "goal_gate_prompt_status_hint")
+		})
+	}
+}
+
+func TestValidate_GoalGateExitStatusContract_NoTerminalMismatchNoError(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target=implement]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  implement [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  review_consensus [
+    shape=box,
+    goal_gate=true,
+    llm_provider=openai,
+    llm_model=gpt-5.2,
+    prompt="Review and decide outcome.\nWrite status JSON with outcome=success when approved."
+  ]
+  review_router [shape=diamond]
+  start -> review_consensus
+  review_consensus -> review_router [condition="outcome=pass"]
+  review_router -> exit [condition="outcome=success"]
+  review_consensus -> implement [condition="outcome=retry"]
+  implement -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "goal_gate_exit_status_contract")
+	assertNoRule(t, diags, "goal_gate_prompt_status_hint")
+}
+
 func assertHasRule(t *testing.T, diags []Diagnostic, rule string, sev Severity) {
 	t.Helper()
 	for _, d := range diags {
@@ -274,4 +382,13 @@ func assertHasRule(t *testing.T, diags []Diagnostic, rule string, sev Severity) 
 		got = append(got, string(d.Severity)+":"+d.Rule)
 	}
 	t.Fatalf("expected %s:%s; got %s", sev, rule, strings.Join(got, ", "))
+}
+
+func assertNoRule(t *testing.T, diags []Diagnostic, rule string) {
+	t.Helper()
+	for _, d := range diags {
+		if d.Rule == rule {
+			t.Fatalf("unexpected diagnostic %s:%s (%s)", d.Severity, d.Rule, d.Message)
+		}
+	}
 }
