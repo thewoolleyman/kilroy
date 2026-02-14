@@ -67,7 +67,7 @@ Expected: no output
 
 Note: this plan file (`docs/plans/2026-02-13-goreleaser-homebrew-tap.md`) intentionally retains references to the old path in its verification steps. It is excluded from the sed replacement and from this check.
 
-**Step 6: Commit**
+**Step 7: Commit**
 
 ```bash
 git add -u
@@ -392,7 +392,7 @@ git push origin vX.Y.Z
 
 Insert as new step 8 (renumber old 8 to 9):
 
-```
+~~~~
 ### 8. Verify the release
 
 1. Watch GitHub Actions: https://github.com/danshapiro/kilroy/actions
@@ -403,7 +403,7 @@ Insert as new step 8 (renumber old 8 to 9):
    brew install danshapiro/kilroy/kilroy
    kilroy --version  # should print the new version
    ```
-```
+~~~~
 
 **Step 5: Update the Safety section**
 
@@ -417,7 +417,7 @@ With:
 - Commit RELEASE_NOTES.md and any README changes before tagging so the tag points to the right commit
 ```
 
-**Step 6: No commit yet** — bundle with Task 7.
+**Step 6: No commit yet** — bundle with Task 8.
 
 ---
 
