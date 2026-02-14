@@ -175,7 +175,7 @@ Do not hardcode a brittle mapping. Use best judgment and keep it consistent with
 
 Before generating DOT, present exactly these three options in a single table:
 
-- **Low:** cheapest current API providers. Use kimi (kimi-k2.5) as default/hard, with 3-way fan-out across kimi, zai (glm-4.7), and minimax (minimax-m2.5) for thinking stages (DoD, planning, review). Minimal thinking. All API — no CLI agents.
+- **Low:** cheapest current API providers. Use kimi (kimi-k2.5) as default/hard, with 3-way fan-out across kimi, zai (glm-4.7), and minimax (minimax-m2.5) for thinking stages (DoD, planning, review). High thinking/reasoning on all nodes — these providers are cheap enough to max out reasoning. All API — no CLI agents.
 - **Medium:** best current model plan (avoid "middle" choices when there's a clear best and a clear cheapest). Thinking per Weather Report / strong defaults. No parallelism.
 - **High:** 3 best current models in parallel for thinking-heavy stages (plan/review), then synthesize. Maximum thinking.
 
