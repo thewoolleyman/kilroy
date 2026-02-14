@@ -287,6 +287,14 @@ func writeProviderCatalogForTest(t *testing.T) string {
       "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
       "pricing": {"prompt": "0.000001", "completion": "0.000002"},
       "top_provider": {"context_length": 131072, "max_completion_tokens": 8192}
+    },
+    {
+      "id": "minimax/minimax-m2.5",
+      "context_length": 196608,
+      "supported_parameters": ["tools"],
+      "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+      "pricing": {"prompt": "0.00000015", "completion": "0.0000012"},
+      "top_provider": {"context_length": 196608, "max_completion_tokens": 16384}
     }
   ]
 }`), 0o644); err != nil {
@@ -322,6 +330,14 @@ func TestRunWithConfig_AcceptsKimiAndZaiAPIProviders(t *testing.T) {
 			keyEnv:   "ZAI_API_KEY",
 			baseURL:  "http://127.0.0.1:1",
 			path:     "/api/coding/paas/v4/chat/completions",
+		},
+		{
+			provider: "minimax",
+			model:    "minimax-m2.5",
+			protocol: "openai_chat_completions",
+			keyEnv:   "MINIMAX_API_KEY",
+			baseURL:  "http://127.0.0.1:1",
+			path:     "/v1/chat/completions",
 		},
 	}
 

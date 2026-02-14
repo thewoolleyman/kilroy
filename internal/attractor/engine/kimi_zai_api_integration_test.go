@@ -37,6 +37,9 @@ func TestKimiCodingAndZai_APIIntegration(t *testing.T) {
 		case "/api/coding/paas/v4/chat/completions":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"x","model":"minimax-m2.5","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -83,6 +86,7 @@ digraph G {
 
 	runCase("kimi", "kimi-k2.5", "KIMI_API_KEY", srv.URL+"/coding")
 	runCase("zai", "glm-4.7", "ZAI_API_KEY", srv.URL)
+	runCase("minimax", "minimax-m2.5", "MINIMAX_API_KEY", srv.URL)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -91,6 +95,9 @@ digraph G {
 	}
 	if seenPaths["/api/coding/paas/v4/chat/completions"] == 0 {
 		t.Fatalf("missing zai chat-completions call: %v", seenPaths)
+	}
+	if seenPaths["/v1/chat/completions"] == 0 {
+		t.Fatalf("missing minimax chat-completions call: %v", seenPaths)
 	}
 }
 
