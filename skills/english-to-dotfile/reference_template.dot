@@ -222,7 +222,6 @@ digraph reference_template {
     // Verify/check inner loop (tool gates first, semantic review last)
     implement -> check_implement
     check_implement -> verify_fmt [condition="outcome=success"]
-    check_implement -> verify_fmt [condition="outcome=partial_success"]
     check_implement -> implement  [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
     check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
     verify_fmt -> check_fmt

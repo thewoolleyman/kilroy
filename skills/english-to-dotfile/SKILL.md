@@ -491,7 +491,7 @@ For build pipelines, no exceptions: every implementation node (including `impl_s
 
 For the primary single-writer implementation node in the reference hill-climbing template, insert a `check_implement` diamond before deterministic verify gates:
 - `implement -> check_implement`
-- `check_implement -> verify_fmt [condition="outcome=success"]` (and optional `partial_success` route if intentionally supported)
+- `check_implement -> verify_fmt [condition="outcome=success"]`
 - `check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]`
 - `check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]`
 
