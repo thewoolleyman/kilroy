@@ -31,12 +31,31 @@ import (
 
 func loadReferenceTemplate(t *testing.T) []byte {
     t.Helper()
-    p := filepath.Join("skills", "english-to-dotfile", "reference_template.dot")
+    repoRoot := findRepoRoot(t)
+    p := filepath.Join(repoRoot, "skills", "english-to-dotfile", "reference_template.dot")
     b, err := os.ReadFile(p)
     if err != nil {
         t.Fatalf("read reference template: %v", err)
     }
     return b
+}
+
+func findRepoRoot(t *testing.T) string {
+    t.Helper()
+    dir, err := os.Getwd()
+    if err != nil {
+        t.Fatal(err)
+    }
+    for {
+        if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+            return dir
+        }
+        parent := filepath.Dir(dir)
+        if parent == dir {
+            t.Fatal("could not find repo root (no go.mod)")
+        }
+        dir = parent
+    }
 }
 
 func TestReferenceTemplate_ImplementNodeDisablesAllowPartial(t *testing.T) {
