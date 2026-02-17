@@ -17,9 +17,10 @@ Take English requirements of any size and produce a valid `.dot` pipeline file t
 
 When invoked programmatically (via CLI), output ONLY the raw `.dot` file content. No markdown fences, no explanatory text before or after the digraph. The output must start with `digraph` and end with the closing `}`.
 
-**Exception (programmatic disambiguation):** If you cannot confidently generate a correct `.dot` file because the user's request is ambiguous in a load-bearing way (identity/meaning) and you cannot ask questions (CLI ingest), output a short clarification request and STOP. In this exception case, do NOT output any `digraph` at all. Start the output with `NEEDS_CLARIFICATION` and include exactly one disambiguation question plus 2-5 concrete options anchored by repo evidence (paths/names).
-
-**Exception (programmatic validation failure):** If after the self-validation/repair loop (Phase 6, max 10 attempts) you still cannot produce a `.dot` that passes validation, output a short failure report and STOP. Do NOT output any `digraph` at all. Start the output with `DOT_VALIDATION_FAILED` and include the last validator errors.
+Programmatic hard rule:
+- Never emit non-DOT sentinel responses (for example `NEEDS_CLARIFICATION` or `DOT_VALIDATION_FAILED`) as final output.
+- If ambiguity remains and you cannot ask questions, choose the best-supported interpretation from repo evidence, record assumptions in the generated pipeline artifacts, and still emit a `.dot`.
+- If the validation loop cannot fully clear all diagnostics, emit the best corrected `.dot` candidate (not a text failure report).
 
 When invoked interactively (in conversation), you may include explanatory text.
 
@@ -67,23 +68,12 @@ Interactive mode (conversation):
 - Provide 2-5 options, each anchored by concrete repo evidence (paths/names).
 - Do NOT generate any `.dot` until the user answers.
 
-#### Step 0A.4: If Still Ambiguous, Stop and Request Disambiguation (Programmatic)
+#### Step 0A.4: If Still Ambiguous, Resolve via Best-Evidence Assumptions (Programmatic)
 
 Programmatic mode (CLI ingest / cannot ask):
-- If ambiguity is load-bearing after repo triage, you MUST NOT emit any `.dot`.
-- Output a short clarification request (so ingestion fails fast) and STOP.
-- Ask exactly ONE disambiguation question and provide 2-5 options, each anchored by concrete repo evidence (paths/names).
-- Do NOT ask preference questions (language/framework/style).
-
-Required output format for this exception case:
-```
-NEEDS_CLARIFICATION
-Question: <single disambiguation question>
-Options:
-- [A] <option A> (evidence: <paths/names>)
-- [B] <option B> (evidence: <paths/names>)
-Reply with: A|B|...
-```
+- You cannot ask follow-up questions, so resolve ambiguity using the strongest available repo evidence and proceed.
+- Record the chosen interpretation and assumptions in downstream artifacts (`.ai/spec.md` and/or `.ai/disambiguation_assumptions.md`).
+- Do NOT emit clarification-only text as final output; always emit DOT.
 
 Downstream requirement (after ambiguity is resolved interactively or via evidence):
 - Document disambiguation choices in a shared artifact for downstream nodes:
@@ -114,7 +104,7 @@ Treat constraints as requirements to satisfy when possible, but still run the fu
 Read the preferences file at `.claude/skills/english-to-dotfile/preferences.yaml`.
 
 This file contains:
-- **Default models per role** (`defaults.models.default`, `.hard`, `.verify`, `.review`). If a role has a non-empty model ID, use it as the starting default for that role. The Weather Report and user overrides can still supersede it.
+- **Default models per role** (`defaults.models.default`, `.hard`, `.verify`, `.review`). If a role has a non-empty model ID, use it as the starting default for that role. Catalog-driven resolution and user overrides can still supersede it.
 - **Executor preference** (`executor`). A single global setting: "cli" or "api". When set to "cli", prefer CLI agents (codex, claude, gemini) for all providers. Falls back to API if the CLI binary isn't installed.
 
 If the file is missing or unreadable, proceed with no defaults (same as all fields blank).
@@ -134,39 +124,33 @@ Also check the run config (if one exists or is being generated alongside the DOT
 
 If a provider has neither API nor CLI available, you MUST NOT propose models from that provider.
 
-#### Step 0.3: Fetch "What's Current Today" (Weather Report)
+#### Step 0.3: Resolve Model Catalog Source (Kilroy ModelDB / OpenRouter)
 
-Fetch:
-- `curl -fsSL https://factory.strongdm.ai/weather-report`
+Prefer model metadata from Kilroy's model catalog source:
+- If a run config is present, read `modeldb.openrouter_model_info_path` (or the run snapshot under `{logs_root}/modeldb/openrouter_models.json` when available).
+- Otherwise use the repo-pinned snapshot at `internal/attractor/modeldb/pinned/openrouter_models.json` when present.
+- If no catalog file is available, fall back to explicit user-requested model IDs and environment-verified provider availability.
 
-Extract the "Today's Models" list and treat it as the source of **current** model lines for each provider (including any consensus entries). Also extract any per-model parameter guidance (the Weather Report "Parameters" column) to inform thinking.
+Treat this catalog as advisory metadata (valid IDs/capabilities/cost/context), not a hard allowlist.
 
-#### Step 0.4: Fetch Token Costs (Latest LiteLLM Catalog)
+#### Step 0.4: Resolve Candidate Models from the Catalog
 
-Fetch:
-- `curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+From the selected catalog source:
+- Filter to providers that are actually executable in this environment (Step 0.2).
+- Prefer newer/current model lines per provider when no explicit user model is given.
+- Use catalog metadata to compare capability and cost tradeoffs.
+- If the user explicitly requests a model ID, honor it even if it is absent from the local catalog snapshot.
 
-Use the LiteLLM catalog to verify model IDs and look up costs. However: **if the user explicitly requests a model that is not in the catalog, always obey the user.** New models often appear on provider APIs before LiteLLM adds them. The catalog is a reference, not a gatekeeper. Only reject model IDs that you yourself are inventing without user or Weather Report backing.
+#### Step 0.5: Define "Current" and "Cheapest" for This Run
 
-#### Step 0.5: Resolve Weather Report Names to Real Model IDs (Best-Effort, Verified)
-
-Weather Report names may not exactly match LiteLLM keys.
-
-For each Weather Report model name:
-- Find a matching LiteLLM key by searching the catalog (best-effort string normalization is OK).
-- Prefer exact/near-exact matches and "latest" variants when present.
-- If a Weather Report model has no catalog match, **use it anyway** — the Weather Report reflects what is actually running in production today. New models routinely appear before LiteLLM catalogs them.
-
-#### Step 0.6: Define "Current" and "Cheapest (Current-Only)"
-
-- **Current models** are the resolved Weather Report models (after filtering by provider access).
-- **Cheapest** must be chosen **only from current model lines** (do not pick older generations just because they are cheaper).
-  - If you need "cheaper", reduce thinking and parallelism first.
+- **Current models** are the best available models from the selected catalog source after provider-access filtering.
+- **Cheapest** means cheapest among the currently selected provider/model candidates for this run (not arbitrary legacy models from stale sources).
+- If you need lower cost, reduce thinking and parallelism before dropping to weaker model families.
 
 #### Step 0.7: Decide Thinking (No Fixed Mapping Table)
 
 Choose a thinking level for each option using:
-- Weather Report parameter guidance (when present), and
+- Catalog/provider parameter guidance (when present), and
 - Otherwise, the option's intent (Low = minimal, Medium = strong/default, High = maximum).
 
 Do not hardcode a brittle mapping. Use best judgment and keep it consistent with the option's cost/quality goal.
@@ -175,9 +159,9 @@ Do not hardcode a brittle mapping. Use best judgment and keep it consistent with
 
 Before generating DOT, present exactly these three options in a single table:
 
-- **Low:** cheapest current API providers. Use kimi (kimi-k2.5) as default/hard, with 3-way fan-out across kimi, zai (glm-4.7), and minimax (minimax-m2.5) for thinking stages (DoD, planning, review). High thinking/reasoning on all nodes — these providers are cheap enough to max out reasoning. All API — no CLI agents.
-- **Medium:** best current model plan (avoid "middle" choices when there's a clear best and a clear cheapest). 3-way fan-out for thinking stages (DoD, planning, review) per the reference template, using the best current model across all branches. Thinking per Weather Report / strong defaults.
-- **High:** 3 best current models from different providers in parallel for thinking-heavy stages (DoD/plan/review), then synthesize. Maximum thinking. Cross-provider diversity maximizes independent reasoning.
+- **Low:** lowest-cost viable plan from currently available catalog models, prioritizing reliability and reduced parallelism.
+- **Medium:** default best-quality/efficiency plan from current models for this environment, following the reference template.
+- **High:** strongest available cross-provider plan (when available) for thinking-heavy stages, then synthesize.
 
 The table MUST include:
 - Which model(s) you'd use for `impl`, `verify`, and the 3 fan-out branches + synthesis model.
@@ -209,6 +193,7 @@ Once the choice/overrides are known:
   - Add visit-count loop breakers by default.
   - Parallelize implementation unless the user explicitly asks for it and the graph includes clear isolation and merge steps.
 - Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
+- Ensure every codergen (`shape=box`) node resolves a concrete `llm_provider` (typically via stylesheet), because Kilroy validation requires provider resolution.
 - For Medium, all fan-out branches use the same model (session-level variance). For High, assign different providers to `branch-a`/`branch-b`/`branch-c` in the stylesheet (cross-provider diversity).
 
 Constraint fast-path (required when applicable):
@@ -235,7 +220,7 @@ For iterative build workflows, keep this structure unless the user asks for a di
 
 If the input is short/vague, expand into a structured spec covering: what the software is, language/platform, inputs/outputs, core features, acceptance criteria. Write the expanded spec to `.ai/spec.md` locally (for your reference while building the graph).
 
-**Critical:** The pipeline runs in a fresh git worktree with no pre-existing files. The spec must be created INSIDE the pipeline by an `expand_spec` node. Two scenarios:
+**Critical:** The pipeline runs in a fresh run worktree created from the repo base commit. Repository files are present, but generated `.ai/` artifacts are not guaranteed to exist yet. The spec must be created INSIDE the pipeline by an `expand_spec` node when no input spec file exists. Two scenarios:
 
 **Vague input** (e.g., "solitaire plz"): Add an `expand_spec` node as the first node after start. Its prompt contains the expanded requirements inline and instructs the agent to write `.ai/spec.md`. This is the ONE exception to the "don't inline the spec" rule — the expand_spec node bootstraps the spec into existence.
 
@@ -663,7 +648,7 @@ In the 2-node pattern, the work node acts as its own steer — its prompt instru
 
 ##### File-based inter-node communication
 
-Nodes communicate through the filesystem, not through context variables. Each node writes its output to a named file under `.ai/`, and downstream nodes' prompts tell them which files to read:
+Use filesystem artifacts for substantial inter-node handoffs. Each node writes its output to a named file under `.ai/`, and downstream nodes' prompts tell them which files to read:
 
 ```
 plan [
@@ -682,7 +667,7 @@ review [
 ]
 ```
 
-This pattern is mandatory because each node runs in a fresh agent session with no memory of prior nodes. The filesystem is the only shared state.
+This pattern is mandatory for large handoffs because node sessions are isolated. The engine context is still shared for small routing/state values (for example `outcome`, `failure_class`, and other `context_updates`), but durable multi-node deliverables should be passed via files.
 
 ##### Artifact handoff integrity (required)
 
@@ -919,7 +904,7 @@ Repair loop (max 10 attempts):
    - If BOTH succeed, stop and emit exactly `candidate_dot` as your final response.
    - If either fails, apply the smallest possible edits to `candidate_dot` to address the reported errors, then retry.
 3. If attempt 10 still fails:
-   - Programmatic mode: output `DOT_VALIDATION_FAILED` with the last error messages and STOP (no digraph).
+   - Programmatic mode: emit the best repaired `candidate_dot` (raw DOT only). Do NOT emit non-DOT sentinel/error text.
    - Interactive mode: explain what failed and include the last error messages (do not pretend it validates).
 
 Common repairs (use validator output; do not guess blindly):
@@ -968,7 +953,7 @@ Common repairs (use validator output; do not guess blindly):
 | `timeout` | Duration (e.g., `"300"`, `"900s"`, `"15m"`). Applies to any node type. Bare integers are seconds. |
 | `auto_status` | `true` = auto-generate SUCCESS outcome if handler writes no status.json. Only use on `expand_spec`. |
 | `llm_model` | Override model for this node (overrides stylesheet) |
-| `llm_provider` | Override provider for this node |
+| `llm_provider` | Provider for this node (required after stylesheet resolution for codergen nodes). Set explicitly or via `model_stylesheet`. |
 | `reasoning_effort` | `low`, `medium`, `high` |
 | `escalation_models` | Comma-separated `provider:model` pairs for capability escalation. When the node fails with `budget_exhausted` or `compilation_loop`, the engine cycles through these models after `retries_before_escalation` same-model retries. Example: `"kimi:kimi-k2.5, anthropic:claude-opus-4-6"` |
 | `fidelity` | Context fidelity: `full`, `truncate`, `compact`, `summary:low`, `summary:medium`, `summary:high` |
