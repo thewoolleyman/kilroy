@@ -1015,6 +1015,19 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 
+	if codexSemantics {
+		preflightMeta, preflightOut := maybeRunRustSandboxPreflight(ctx, node, execCtx.WorktreeDir, stageDir, isolatedEnv)
+		if preflightMeta != nil {
+			inv["rust_sandbox_preflight"] = preflightMeta
+			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json rust preflight metadata: %v", err))
+			}
+		}
+		if preflightOut != nil {
+			return "", preflightOut, nil
+		}
+	}
+
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
 
 	runOnce := func(args []string) (runErr error, exitCode int, dur time.Duration, err error) {

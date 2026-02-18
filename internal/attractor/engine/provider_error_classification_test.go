@@ -56,6 +56,36 @@ func TestClassifyProviderCLIError_CodexIdleTimeout_RunErrSignal(t *testing.T) {
 	}
 }
 
+func TestClassifyProviderCLIError_CratesDNSIsTransient(t *testing.T) {
+	got := classifyProviderCLIError(
+		"openai",
+		"error: failed to download from https://index.crates.io/config.json\nCaused by: Could not resolve host: index.crates.io",
+		errors.New("exit status 1"),
+	)
+
+	if got.FailureClass != failureClassTransientInfra {
+		t.Fatalf("FailureClass: got %q want %q", got.FailureClass, failureClassTransientInfra)
+	}
+	if !strings.HasPrefix(got.FailureSignature, "provider_transport|openai|") {
+		t.Fatalf("FailureSignature: got %q", got.FailureSignature)
+	}
+}
+
+func TestClassifyProviderCLIError_CrossDeviceLinkIsTransient(t *testing.T) {
+	got := classifyProviderCLIError(
+		"openai",
+		"error: failed to write target.rmeta: Invalid cross-device link (os error 18)",
+		errors.New("exit status 1"),
+	)
+
+	if got.FailureClass != failureClassTransientInfra {
+		t.Fatalf("FailureClass: got %q want %q", got.FailureClass, failureClassTransientInfra)
+	}
+	if !strings.HasPrefix(got.FailureSignature, "provider_transport|openai|") {
+		t.Fatalf("FailureSignature: got %q", got.FailureSignature)
+	}
+}
+
 func TestClassifyProviderCLIError_UnknownFallbackIsDeterministic(t *testing.T) {
 	got := classifyProviderCLIError(
 		"anthropic",
@@ -125,7 +155,7 @@ func TestLooksLikeStreamDisconnect(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "stream_disconnected_among_normal_events",
+			name: "stream_disconnected_among_normal_events",
 			stdout: `{"type":"item.completed","item":{"id":"item_1"}}
 {"type":"item.completed","item":{"id":"item_2"}}
 {"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion)"}

@@ -100,6 +100,14 @@ func classifyProviderCLIError(provider string, stderr string, runErr error) prov
 	}
 	if strings.Contains(combined, "connection refused") ||
 		strings.Contains(combined, "connection reset") ||
+		strings.Contains(combined, "could not resolve host") ||
+		strings.Contains(combined, "could not resolve hostname") ||
+		strings.Contains(combined, "temporary failure in name resolution") ||
+		strings.Contains(combined, "index.crates.io") ||
+		strings.Contains(combined, "download of config.json failed") ||
+		strings.Contains(combined, "invalid cross-device link") ||
+		strings.Contains(combined, "cross-device link") ||
+		strings.Contains(combined, "os error 18") ||
 		strings.Contains(combined, "broken pipe") ||
 		strings.Contains(combined, "temporary failure") ||
 		strings.Contains(combined, "service unavailable") ||

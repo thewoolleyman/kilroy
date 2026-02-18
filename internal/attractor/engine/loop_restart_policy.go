@@ -31,6 +31,10 @@ var (
 		"context deadline exceeded",
 		"connection refused",
 		"connection reset",
+		"could not resolve host",
+		"could not resolve hostname",
+		"temporary failure in name resolution",
+		"network is unreachable",
 		"broken pipe",
 		"tls handshake timeout",
 		"i/o timeout",
@@ -48,6 +52,14 @@ var (
 		"transport is closing",
 		"stream disconnected",
 		"stream closed before",
+		"index.crates.io",
+		"download of config.json failed",
+		"toolchain_or_dependency_registry_unavailable",
+		"toolchain dependency resolution blocked by network",
+		"toolchain_workspace_io",
+		"cross-device link",
+		"invalid cross-device link",
+		"os error 18",
 		"502",
 		"503",
 		"504",
@@ -148,7 +160,7 @@ func normalizedFailureClass(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "<nil>":
 		return ""
-	case "transient", "transient_infra", "transient-infra", "infra_transient", "transient infra", "infrastructure_transient", "retryable":
+	case "transient", "transient_infra", "transient-infra", "infra_transient", "transient infra", "infrastructure_transient", "retryable", "toolchain_workspace_io", "toolchain-workspace-io", "toolchain_or_dependency_registry_unavailable", "toolchain-dependency-registry-unavailable":
 		return failureClassTransientInfra
 	case "canceled", "cancelled":
 		return failureClassCanceled
