@@ -86,3 +86,52 @@ func TestReferenceTemplate_ImplementFailureRoutedBeforeVerify(t *testing.T) {
 		)
 	}
 }
+
+func TestReferenceTemplate_ToolchainGateIsOutcomeControlledAndRestarted(t *testing.T) {
+	g, err := dot.Parse(loadReferenceTemplate(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	hasStartToToolchain := false
+	hasToolchainSuccessToExpand := false
+	hasToolchainDeterministicFailToPostmortem := false
+	hasToolchainTransientRestart := false
+	hasToolchainBypassToExpand := false
+	hasPostmortemRestartToToolchain := false
+
+	for _, e := range g.Edges {
+		cond := e.Condition()
+		switch {
+		case e.From == "start" && e.To == "check_toolchain" && cond == "":
+			hasStartToToolchain = true
+		case e.From == "check_toolchain" && e.To == "expand_spec" && cond == "outcome=success":
+			hasToolchainSuccessToExpand = true
+		case e.From == "check_toolchain" && e.To == "postmortem" && cond == "outcome=fail && context.failure_class!=transient_infra":
+			hasToolchainDeterministicFailToPostmortem = true
+		case e.From == "check_toolchain" && e.To == "check_toolchain" && cond == "outcome=fail && context.failure_class=transient_infra" && e.Attr("loop_restart", "false") == "true":
+			hasToolchainTransientRestart = true
+		case e.From == "check_toolchain" && e.To == "expand_spec" && cond == "":
+			hasToolchainBypassToExpand = true
+		case e.From == "postmortem" && e.To == "check_toolchain" && cond == "" && e.Attr("loop_restart", "false") == "true":
+			hasPostmortemRestartToToolchain = true
+		}
+	}
+
+	if !hasStartToToolchain ||
+		!hasToolchainSuccessToExpand ||
+		!hasToolchainDeterministicFailToPostmortem ||
+		!hasToolchainTransientRestart ||
+		hasToolchainBypassToExpand ||
+		!hasPostmortemRestartToToolchain {
+		t.Fatalf(
+			"missing/broken toolchain gate routing: start_to_toolchain=%v success_to_expand=%v deterministic_fail_to_postmortem=%v transient_restart=%v bypass_to_expand=%v postmortem_restart_to_toolchain=%v",
+			hasStartToToolchain,
+			hasToolchainSuccessToExpand,
+			hasToolchainDeterministicFailToPostmortem,
+			hasToolchainTransientRestart,
+			hasToolchainBypassToExpand,
+			hasPostmortemRestartToToolchain,
+		)
+	}
+}

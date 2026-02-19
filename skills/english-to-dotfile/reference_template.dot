@@ -267,6 +267,6 @@ digraph reference_template {
     review_consensus -> exit [condition="outcome=success"]
     review_consensus -> postmortem
 
-    // Hill-climbing loop: postmortem -> re-plan -> re-implement -> re-review
-    postmortem -> plan_fanout [loop_restart=true]
+    // Hill-climbing loop: restart through prerequisite gate before re-planning
+    postmortem -> check_toolchain [loop_restart=true]
 }
