@@ -10,6 +10,7 @@ import (
 )
 
 var detachedExecCommand = exec.Command
+var detachedOSExecutable = os.Executable
 
 func launchDetached(args []string, logsRoot string) error {
 	if strings.TrimSpace(logsRoot) == "" {
@@ -26,7 +27,11 @@ func launchDetached(args []string, logsRoot string) error {
 	}
 	defer func() { _ = outFile.Close() }()
 
-	cmd := detachedExecCommand(os.Args[0], args...)
+	exePath, err := detachedExecutablePath()
+	if err != nil {
+		return err
+	}
+	cmd := detachedExecCommand(exePath, args...)
 	cmd.Dir = logsRoot
 	cmd.Stdin = nil
 	cmd.Stdout = outFile
@@ -43,6 +48,30 @@ func launchDetached(args []string, logsRoot string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func detachedExecutablePath() (string, error) {
+	if exePath, err := detachedOSExecutable(); err == nil && strings.TrimSpace(exePath) != "" {
+		if filepath.IsAbs(exePath) {
+			return exePath, nil
+		}
+		absExePath, absErr := filepath.Abs(exePath)
+		if absErr == nil && strings.TrimSpace(absExePath) != "" {
+			return absExePath, nil
+		}
+	}
+	arg0 := strings.TrimSpace(os.Args[0])
+	if arg0 == "" {
+		return "", fmt.Errorf("cannot resolve executable path for detached run")
+	}
+	if filepath.IsAbs(arg0) {
+		return arg0, nil
+	}
+	abs, err := filepath.Abs(arg0)
+	if err != nil {
+		return "", fmt.Errorf("resolve detached executable path: %w", err)
+	}
+	return abs, nil
 }
 
 func defaultDetachedLogsRoot(runID string) (string, error) {

@@ -116,6 +116,54 @@ digraph G {
 	assertHasRule(t, diags, "llm_provider_required", SeverityError)
 }
 
+func TestValidate_ToolCommandRequired_ParallelogramWithToolCommand_NoError(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, tool_command="echo ok"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "tool_command_required")
+}
+
+func TestValidate_ToolCommandRequired_ParallelogramWithCommandOnly_Error(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, command="echo ok"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "tool_command_required", SeverityError)
+}
+
+func TestValidate_ToolCommandRequired_TypeToolRequiresToolCommand(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=box, type=tool, prompt="ignored for tool"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "tool_command_required", SeverityError)
+}
+
 func TestValidate_PromptOnCodergenNodes_WarnsWhenMissingPrompt(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {

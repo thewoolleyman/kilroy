@@ -60,6 +60,7 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
+	diags = append(diags, lintToolCommandRequired(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
 	diags = append(diags, lintFailLoopFailureClassGuard(g)...)
@@ -686,6 +687,45 @@ func lintLLMProviderPresent(g *model.Graph) []Diagnostic {
 		}
 	}
 	return diags
+}
+
+func lintToolCommandRequired(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		if !nodeResolvesToTool(n) {
+			continue
+		}
+		if strings.TrimSpace(n.Attr("tool_command", "")) != "" {
+			continue
+		}
+
+		msg := "tool node missing tool_command attribute"
+		fix := "set tool_command=\"...\""
+		if strings.TrimSpace(n.Attr("command", "")) != "" {
+			msg = "tool node uses command attribute; expected tool_command"
+			fix = "rename command=... to tool_command=..."
+		}
+
+		diags = append(diags, Diagnostic{
+			Rule:     "tool_command_required",
+			Severity: SeverityError,
+			Message:  msg,
+			NodeID:   id,
+			Fix:      fix,
+		})
+	}
+	return diags
+}
+
+func nodeResolvesToTool(n *model.Node) bool {
+	typeOverride := strings.TrimSpace(n.Attr("type", ""))
+	if typeOverride != "" {
+		return typeOverride == "tool"
+	}
+	return n.Shape() == "parallelogram"
 }
 
 func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {

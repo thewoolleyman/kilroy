@@ -36,3 +36,49 @@ func TestLaunchDetached_SetsCmdDirToLogsRoot(t *testing.T) {
 		t.Fatalf("child cwd mismatch: got %q want %q", got, logsRoot)
 	}
 }
+
+func TestLaunchDetached_UsesAbsoluteExecutablePath(t *testing.T) {
+	logsRoot := t.TempDir()
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"./kilroy", "attractor", "run", "--detach"}
+
+	var gotName string
+	oldExec := detachedExecCommand
+	t.Cleanup(func() { detachedExecCommand = oldExec })
+	detachedExecCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		return exec.Command("bash", "-c", "sleep 0.1")
+	}
+
+	if err := launchDetached([]string{"attractor", "run"}, logsRoot); err != nil {
+		t.Fatalf("launchDetached: %v", err)
+	}
+
+	if gotName == "" {
+		t.Fatal("detached executable path was not captured")
+	}
+	if !filepath.IsAbs(gotName) {
+		t.Fatalf("detached executable path must be absolute, got %q", gotName)
+	}
+	if gotName == "./kilroy" {
+		t.Fatalf("detached executable path must not use relative argv0, got %q", gotName)
+	}
+}
+
+func TestDetachedExecutablePath_NormalizesRelativeOSExecutable(t *testing.T) {
+	oldOSExecutable := detachedOSExecutable
+	t.Cleanup(func() { detachedOSExecutable = oldOSExecutable })
+	detachedOSExecutable = func() (string, error) {
+		return "./kilroy", nil
+	}
+
+	path, err := detachedExecutablePath()
+	if err != nil {
+		t.Fatalf("detachedExecutablePath: %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("detachedExecutablePath must return absolute path, got %q", path)
+	}
+}

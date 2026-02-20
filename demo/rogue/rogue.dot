@@ -1,101 +1,256 @@
-digraph rogue_wasm_port_pipeline {
-  graph [
-    goal="a faithful browser-playable WebAssembly port of Rogue 5.4.4 from demo/rogue/original-rogue to demo/rogue/rogue-wasm/www/index.html with classic 80x24 ASCII terminal rendering",
-    rankdir=LR,
-    default_max_retry=3,
-    retry_target="implement_port",
-    fallback_retry_target="postmortem",
-    model_stylesheet="
-      * { llm_provider: openai; llm_model: gpt-4.1-mini; }
-      .hard { llm_provider: openai; llm_model: gpt-4.1; }
-      .verify { llm_provider: openai; llm_model: o4-mini; }
-      .review { llm_provider: openai; llm_model: o3; }
-    "
-  ];
+digraph rogue_pipeline {
+    graph [
+        goal="a faithful WebAssembly browser port of Rogue 5.4.4 with a single-page ASCII terminal UI at demo/rogue/rogue-wasm/www/index.html",
+        rankdir=LR,
+        default_max_retry=3,
+        retry_target="implement",
+        fallback_retry_target="debate_consolidate",
+        provenance_version="1",
+        model_stylesheet="
+            * { llm_model: minimax-m2.5; llm_provider: minimax; }
+            .hard { llm_model: minimax-m2.5; llm_provider: minimax; }
+            .verify { llm_model: minimax-m2.5; llm_provider: minimax; }
+            .branch-a { llm_model: minimax-m2.5; llm_provider: minimax; }
+            .branch-b { llm_model: moonshotai/kimi-k2.5; llm_provider: kimi; }
+            .branch-c { llm_model: glm-5; llm_provider: zai; }
+        "
+    ]
 
-  start [shape=Mdiamond];
-  exit [shape=Msquare];
+    start [shape=Mdiamond, label="Start"]
+    exit [shape=Msquare, label="Exit"]
 
-  verify_toolchain [shape=parallelogram, class="verify", prompt="Run deterministic prerequisites: test -d demo/rogue/original-rogue; test -f demo/rogue/original-rogue/rogue.h; command -v rustc; command -v cargo; command -v wasm-pack. Set outcome=success only if all checks pass. Use failure_class=deterministic for missing files/tools and failure_class=transient_infra for temporary execution/network failures."];
-  check_toolchain [shape=diamond];
+    check_toolchain [
+        shape=parallelogram,
+        max_retries=0,
+        tool_command="test -d demo/rogue/original-rogue && command -v cargo >/dev/null && command -v rustc >/dev/null && command -v wasm-pack >/dev/null"
+    ]
+    check_toolchain_result [shape=diamond, label="Toolchain OK?"]
 
-  expand_spec [shape=box, prompt="Task: Create or refresh canonical spec for $goal.\nRead: existing .ai/spec.md if present; repository context under demo/rogue/original-rogue/.\nWrite: .ai/spec.md and, if any critical unknowns remain, .ai/spec_gaps.md.\nAcceptance checks: .ai/spec.md defines exact mechanical-port constraints, ncurses-to-WASM bridge requirements, localStorage save/load, deliverable path demo/rogue/rogue-wasm/www/index.html, and concrete verification steps.\nVerbatim user input:\n<<<USER_INPUT\nPort the classic Rogue 5.4.4 game from C to Rust compiled to WebAssembly, playable in a browser. The original C source is at demo/rogue/original-rogue/ — about 16,800 lines across 33 files. The deliverable is a single HTML page at demo/rogue/rogue-wasm/www/index.html with classic ASCII terminal rendering: 80x24 grid, @ player, # corridors, monster letters A-Z, dark background, monospace font. This must be an exact mechanical port — same dungeon generation algorithms, same monster stats and AI, same item tables, same RNG formula, same combat math — a faithful 1:1 translation of every game system. ncurses I/O gets replaced by a WASM bridge to a JS terminal renderer, and save/load uses localStorage instead of the filesystem.\n<<<END_USER_INPUT\nOutcome behavior: set status=success only when .ai/spec.md is usable by downstream nodes; set status=retry only for transient infra blockers; set status=fail for deterministic blockers.\nStatus contract: Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path). If unavailable, use $KILROY_STAGE_STATUS_FALLBACK_PATH. Do not write nested status.json files after cd. Use canonical schema {\"status\":\"success\"|\"retry\"|\"fail\"}. For status=fail or status=retry include failure_reason and details; include failure_class when deterministic blockers apply."];
-  check_expand_spec [shape=diamond];
+    expand_spec [
+        shape=box,
+        prompt="Goal: $goal\n\nCreate or reuse a canonical specification at .ai/spec.md.\n\nPriority order:\n1) If .ai/spec.md already exists and is adequate, keep meaning and do form-only cleanup.\n2) Otherwise, expand the requirement into .ai/spec.md with sections: Overview, Scope, Constraints, Assumptions, Acceptance Criteria, Verification, Non-goals/Deferrals.\n3) Preserve user-stated constraints exactly, including fidelity requirements.\n\nUSER_INPUT_VERBATIM_START\nPort the classic Rogue 5.4.4 game from C to Rust compiled to WebAssembly, playable in a browser. The original C source is at demo/rogue/original-rogue/ — about 16,800 lines across 33 files. The deliverable is a single HTML page at demo/rogue/rogue-wasm/www/index.html with classic ASCII terminal rendering: 80x24 grid, @ player, # corridors, monster letters A-Z, dark background, monospace font. This must be an exact mechanical port — same dungeon generation algorithms, same monster stats and AI, same item tables, same RNG formula, same combat math — a faithful 1:1 translation of every game system. ncurses I/O gets replaced by a WASM bridge to a JS terminal renderer, and save/load uses localStorage instead of the filesystem.\nUSER_INPUT_VERBATIM_END\n\nRead: demo/rogue/rogue-prompt.txt if present, existing .ai/spec.md if present.\nWrite: .ai/spec.md and .ai/spec_gaps.md only when gaps remain.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/spec.md is complete and usable; otherwise set status=fail."
+    ]
 
-  define_dod [shape=box, prompt="Task: Produce project Definition of Done from .ai/spec.md.\nRead: .ai/spec.md and .ai/spec_gaps.md when present.\nWrite: .ai/definition_of_done.md and optional .ai/dod_gaps.md.\nAcceptance checks: DoD includes Scope, Deliverables, Acceptance Criteria, Verification, Quality/Safety Gates, and Non-Goals; explicitly covers build/package, tests, lint/format/static analysis, docs, compatibility/migrations, security/privacy, operational readiness, and performance/reliability with criteria or N/A rationale.\nOutcome behavior: set status=success only when the DoD is complete and testable; set status=retry only for transient infra blockers; set status=fail for deterministic blockers.\nStatus contract: Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path). If unavailable, use $KILROY_STAGE_STATUS_FALLBACK_PATH. Do not write nested status.json files after cd. Use canonical schema {\"status\":\"success\"|\"retry\"|\"fail\"}. For status=fail or status=retry include failure_reason and details; include failure_class when deterministic blockers apply."];
-  check_dod [shape=diamond];
+    check_dod [
+        shape=box,
+        prompt="Goal: $goal\n\nDetermine whether .ai/definition_of_done.md exists and is adequate.\nRead: .ai/definition_of_done.md if present and .ai/spec.md.\nDo not rewrite files in this step.\n\nClassification:\n- status=has_dod if the DoD is specific, verifiable, and covers build/tests/lint/docs/compatibility/security/operations/performance (or explicit N/A with reason).\n- status=needs_dod if missing or inadequate.\n- status=fail only for blocking read/parse errors.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures."
+    ]
 
-  implement_port [shape=box, class="hard", prompt="Task: Implement an exact mechanical C-to-Rust port of Rogue 5.4.4 to WebAssembly.\nRead: .ai/spec.md, .ai/definition_of_done.md, and all source files under demo/rogue/original-rogue/.\nWrite: Rust/WASM implementation under demo/rogue/rogue-wasm/, browser entrypoint demo/rogue/rogue-wasm/www/index.html, JS terminal bridge replacing ncurses I/O, localStorage-backed save/load, seeded parity tests in demo/rogue/rogue-wasm/tests/parity_seeded_runs.rs, and .ai/implementation_log.md.\nAcceptance checks: preserve dungeon generation, RNG formula, monster stats/AI, item tables, combat math, and game-system behavior 1:1; UI renders 80x24 ASCII terminal with dark background and monospace styling.\nOutcome behavior: set status=success only when implementation and required artifacts are complete; set status=retry only for transient infra blockers; set status=fail for deterministic blockers.\nStatus contract: Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path). If unavailable, use $KILROY_STAGE_STATUS_FALLBACK_PATH. Do not write nested status.json files after cd. Use canonical schema {\"status\":\"success\"|\"retry\"|\"fail\"}. For status=fail or status=retry include failure_reason and details; include failure_class when deterministic verification failures occur."];
-  check_implement [shape=diamond];
+    dod_fanout [shape=component, label="DoD Fan-Out"]
 
-  verify_build [shape=parallelogram, class="verify", prompt="Run deterministic verification commands in demo/rogue/rogue-wasm: cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo test; wasm-pack build --target web --release. Set outcome=success only if all pass. Use failure_class=deterministic for compile/test/lint failures and failure_class=transient_infra for temporary infrastructure failures."];
-  check_build [shape=diamond];
+    dod_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nDraft a DoD proposal from .ai/spec.md.\nRead: .ai/spec.md.\nWrite: .ai/dod_a.md.\n\nDoD requirements:\n- Outcome-focused and verifiable.\n- Explicit scope, deliverables, acceptance criteria, verification steps.\n- Quality/safety gates and non-goals/deferrals.\n- Explicit coverage for build/package, tests, lint/format/static analysis, docs, compatibility/migrations, security/privacy, operations, performance (or N/A with reason).\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/dod_a.md is written; otherwise status=fail."
+    ]
 
-  verify_deliverable [shape=parallelogram, class="verify", prompt="Run deterministic deliverable checks: test -f demo/rogue/rogue-wasm/www/index.html; grep -Eiq 'monospace' demo/rogue/rogue-wasm/www/index.html; grep -Eiq '80x24|cols[^0-9]*80|rows[^0-9]*24' demo/rogue/rogue-wasm/www/index.html; grep -Eiq 'background|dark' demo/rogue/rogue-wasm/www/index.html. Set failure_class=deterministic when any invariant is missing."];
-  check_deliverable [shape=diamond];
+    dod_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nDraft a DoD proposal from .ai/spec.md.\nRead: .ai/spec.md.\nWrite: .ai/dod_b.md.\n\nDoD requirements:\n- Outcome-focused and verifiable.\n- Explicit scope, deliverables, acceptance criteria, verification steps.\n- Quality/safety gates and non-goals/deferrals.\n- Explicit coverage for build/package, tests, lint/format/static analysis, docs, compatibility/migrations, security/privacy, operations, performance (or N/A with reason).\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/dod_b.md is written; otherwise status=fail."
+    ]
 
-  verify_parity [shape=parallelogram, class="verify", prompt="Run deterministic parity tests: cd demo/rogue/rogue-wasm && cargo test --test parity_seeded_runs -- --nocapture. The test must assert parity for RNG sequence, dungeon generation, monster stats/AI decisions, item tables, combat outcomes, and terminal glyph mapping for @, #, and monster letters A-Z. Use failure_class=deterministic for mismatches."];
-  check_parity [shape=diamond];
+    dod_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nDraft a DoD proposal from .ai/spec.md.\nRead: .ai/spec.md.\nWrite: .ai/dod_c.md.\n\nDoD requirements:\n- Outcome-focused and verifiable.\n- Explicit scope, deliverables, acceptance criteria, verification steps.\n- Quality/safety gates and non-goals/deferrals.\n- Explicit coverage for build/package, tests, lint/format/static analysis, docs, compatibility/migrations, security/privacy, operations, performance (or N/A with reason).\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/dod_c.md is written; otherwise status=fail."
+    ]
 
-  review_consensus [shape=box, class="review", goal_gate=true, prompt="Task: Decide whether $goal is complete per DoD.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, and verification outcomes from prior nodes.\nWrite: .ai/review.md with evidence-based verdict and any remaining gaps.\nAcceptance checks: approve success only if DoD is met and mechanical parity requirements are evidenced; use partial_success only if core objective works with clearly bounded non-critical gaps; use retry/fail otherwise.\nOutcome behavior: set status=success when all DoD criteria are met; set status=partial_success only for bounded non-critical gaps; set status=retry for transient blockers; set status=fail for deterministic blockers.\nStatus contract: Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path). If unavailable, use $KILROY_STAGE_STATUS_FALLBACK_PATH. Do not write nested status.json files after cd. Use canonical schema {\"status\":\"success\"|\"partial_success\"|\"retry\"|\"fail\"}. For status=fail or status=retry include failure_reason and details; include failure_class when deterministic blockers apply."];
+    consolidate_dod [
+        shape=box,
+        prompt="Goal: $goal\n\nCreate the final DoD.\nRead: .ai/spec.md.\nRead fanout outputs by first loading $KILROY_LOGS_ROOT/dod_fanout/parallel_results.json and then reading <worktree_dir>/.ai/dod_a.md, <worktree_dir>/.ai/dod_b.md, <worktree_dir>/.ai/dod_c.md from each branch. If parallel_results.json is missing, fall back to .ai/dod_a.md, .ai/dod_b.md, .ai/dod_c.md in the current worktree.\nWrite: .ai/definition_of_done.md.\n\nEnsure the final DoD is specific, testable, and faithful to .ai/spec.md without prescribing implementation details.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/definition_of_done.md is complete; otherwise status=fail."
+    ]
 
-  postmortem [shape=box, class="verify", prompt="Task: Analyze latest failure and produce a minimal, concrete repair plan for the next implementation attempt.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, .ai/review.md if present, and failure context.\nWrite: .ai/postmortem.md with root cause, what changed assumptions, exact file-level fixes, and verification updates.\nAcceptance checks: plan is directly actionable, scoped, and addresses the failure_reason/details without broad rewrites.\nOutcome behavior: set status=success when an actionable repair plan is produced; set status=retry for transient blockers; set status=fail for deterministic blockers in analysis quality or missing evidence.\nStatus contract: Write status JSON to $KILROY_STAGE_STATUS_PATH (absolute path). If unavailable, use $KILROY_STAGE_STATUS_FALLBACK_PATH. Do not write nested status.json files after cd. Use canonical schema {\"status\":\"success\"|\"retry\"|\"fail\"}. For status=fail or status=retry include failure_reason and details; include failure_class when deterministic blockers apply."];
-  check_postmortem [shape=diamond];
+    plan_fanout [shape=component, label="Plan Fan-Out"]
 
-  start -> verify_toolchain;
-  verify_toolchain -> check_toolchain;
-  check_toolchain -> expand_spec [condition="outcome=success"];
-  check_toolchain -> verify_toolchain [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_toolchain -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_toolchain -> postmortem;
+    plan_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead: .ai/spec.md and .ai/definition_of_done.md. If available, also read .ai/postmortem_latest.md.\nWrite: .ai/plan_a.md.\n\nPlan requirements:\n- Single-writer implementation strategy.\n- Deterministic verification order (fmt, build, test, deliverable checks).\n- Preserve exact mechanical fidelity constraints from spec.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/plan_a.md is written; otherwise status=fail."
+    ]
 
-  expand_spec -> check_expand_spec;
-  check_expand_spec -> define_dod [condition="outcome=success"];
-  check_expand_spec -> expand_spec [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_expand_spec -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_expand_spec -> postmortem;
+    plan_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead: .ai/spec.md and .ai/definition_of_done.md. If available, also read .ai/postmortem_latest.md.\nWrite: .ai/plan_b.md.\n\nPlan requirements:\n- Single-writer implementation strategy.\n- Deterministic verification order (fmt, build, test, deliverable checks).\n- Preserve exact mechanical fidelity constraints from spec.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/plan_b.md is written; otherwise status=fail."
+    ]
 
-  define_dod -> check_dod;
-  check_dod -> implement_port [condition="outcome=success"];
-  check_dod -> define_dod [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_dod -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_dod -> postmortem;
+    plan_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead: .ai/spec.md and .ai/definition_of_done.md. If available, also read .ai/postmortem_latest.md.\nWrite: .ai/plan_c.md.\n\nPlan requirements:\n- Single-writer implementation strategy.\n- Deterministic verification order (fmt, build, test, deliverable checks).\n- Preserve exact mechanical fidelity constraints from spec.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/plan_c.md is written; otherwise status=fail."
+    ]
 
-  implement_port -> check_implement;
-  check_implement -> verify_build [condition="outcome=success"];
-  check_implement -> implement_port [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_implement -> postmortem;
+    debate_consolidate [
+        shape=box,
+        prompt="Goal: $goal\n\nCreate the final executable plan.\nRead: .ai/spec.md and .ai/definition_of_done.md.\nRead fanout outputs by first loading $KILROY_LOGS_ROOT/plan_fanout/parallel_results.json and then reading <worktree_dir>/.ai/plan_a.md, <worktree_dir>/.ai/plan_b.md, <worktree_dir>/.ai/plan_c.md from each branch. If parallel_results.json is missing, fall back to .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md in the current worktree.\nWrite: .ai/plan_final.md.\n\nPlan acceptance checks:\n- Covers all required deliverables including demo/rogue/rogue-wasm/www/index.html.\n- Includes deterministic verification gates before semantic review.\n- Preserves exact-fidelity constraints.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/plan_final.md is complete; otherwise status=fail."
+    ]
 
-  verify_build -> check_build;
-  check_build -> verify_deliverable [condition="outcome=success"];
-  check_build -> verify_build [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_build -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_build -> postmortem;
+    implement [
+        shape=box,
+        class="hard",
+        max_retries=2,
+        prompt="Goal: $goal\n\nImplement the feature using .ai/plan_final.md.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/plan_final.md, and .ai/postmortem_latest.md if present.\nWrite: source files needed for the port and .ai/implementation_log.md.\n\nImplementation constraints:\n- Exact mechanical fidelity to Rogue 5.4.4 gameplay systems.\n- Browser-playable WASM implementation.\n- Deliverable page at demo/rogue/rogue-wasm/www/index.html.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when implementation is ready for checks.\nSet status=fail on deterministic coding/build blockers."
+    ]
+    check_implement [shape=diamond, label="Implement OK?"]
 
-  verify_deliverable -> check_deliverable;
-  check_deliverable -> verify_parity [condition="outcome=success"];
-  check_deliverable -> verify_deliverable [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_deliverable -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_deliverable -> postmortem;
+    verify_fmt [
+        shape=parallelogram,
+        tool_command="cd demo/rogue/rogue-wasm && cargo fmt --check"
+    ]
+    check_fmt [shape=diamond, label="Fmt OK?"]
 
-  verify_parity -> check_parity;
-  check_parity -> review_consensus [condition="outcome=success"];
-  check_parity -> verify_parity [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_parity -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_parity -> postmortem;
+    verify_build [
+        shape=parallelogram,
+        tool_command="cd demo/rogue/rogue-wasm && cargo build --target wasm32-unknown-unknown"
+    ]
+    check_build [shape=diamond, label="Build OK?"]
 
-  review_consensus -> exit [condition="outcome=success"];
-  review_consensus -> exit [condition="outcome=partial_success"];
-  review_consensus -> postmortem [condition="outcome=retry"];
-  review_consensus -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"];
-  review_consensus -> postmortem [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  review_consensus -> postmortem;
+    verify_test [
+        shape=parallelogram,
+        tool_command="cd demo/rogue/rogue-wasm && cargo test"
+    ]
+    check_test [shape=diamond, label="Tests OK?"]
 
-  postmortem -> check_postmortem;
-  check_postmortem -> verify_toolchain [condition="outcome=success"];
-  check_postmortem -> verify_toolchain [condition="outcome=retry"];
-  check_postmortem -> postmortem [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true];
-  check_postmortem -> verify_toolchain [condition="outcome=fail && context.failure_class!=transient_infra"];
-  check_postmortem -> verify_toolchain;
+    verify_deliverable [
+        shape=parallelogram,
+        tool_command="test -f demo/rogue/rogue-wasm/www/index.html && rg -q '80x24|80 x 24|80x 24|80 x24|cols[^0-9]*80' demo/rogue/rogue-wasm/www/index.html && rg -q '@|corridor|monster|localStorage|monospace' demo/rogue/rogue-wasm/www/index.html"
+    ]
+    check_deliverable [shape=diamond, label="Deliverable OK?"]
+
+    verify_artifacts [
+        shape=parallelogram,
+        tool_command="if git diff --name-only | rg -q '(^|/)(target|node_modules|dist|\\.cargo-target|\\.cargo_target)(/|$)'; then echo artifact_paths_detected; exit 1; else exit 0; fi"
+    ]
+    check_artifacts [shape=diamond, label="Artifacts OK?"]
+
+    verify_fidelity [
+        shape=box,
+        class="verify",
+        prompt="Goal: $goal\n\nPerform semantic fidelity review after deterministic checks pass.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, and produced code/assets.\nWrite: .ai/verify_fidelity.md.\n\nAcceptance checks:\n- Confirm game systems remain a faithful 1:1 mechanical port (RNG, combat, AI, items, dungeon generation).\n- Confirm browser rendering constraints and save/load localStorage behavior match spec.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success if fidelity review passes; otherwise set status=fail."
+    ]
+    check_fidelity [shape=diamond, label="Fidelity OK?"]
+
+    review_fanout [shape=component, label="Review Fan-Out"]
+
+    review_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nReview implementation completeness against .ai/definition_of_done.md and .ai/spec.md.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, .ai/verify_fidelity.md.\nWrite: .ai/review_a.md with APPROVED or REJECTED and concrete gaps.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success if approved; set status=fail if rejected."
+    ]
+
+    review_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nReview implementation completeness against .ai/definition_of_done.md and .ai/spec.md.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, .ai/verify_fidelity.md.\nWrite: .ai/review_b.md with APPROVED or REJECTED and concrete gaps.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success if approved; set status=fail if rejected."
+    ]
+
+    review_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nReview implementation completeness against .ai/definition_of_done.md and .ai/spec.md.\nRead: .ai/spec.md, .ai/definition_of_done.md, .ai/implementation_log.md, .ai/verify_fidelity.md.\nWrite: .ai/review_c.md with APPROVED or REJECTED and concrete gaps.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success if approved; set status=fail if rejected."
+    ]
+
+    review_consensus [
+        shape=box,
+        goal_gate=true,
+        prompt="Goal: $goal\n\nSynthesize review outcomes into a single consensus.\nRead: .ai/spec.md and .ai/definition_of_done.md.\nRead fanout outputs by first loading $KILROY_LOGS_ROOT/review_fanout/parallel_results.json and then reading <worktree_dir>/.ai/review_a.md, <worktree_dir>/.ai/review_b.md, <worktree_dir>/.ai/review_c.md from each branch. If parallel_results.json is missing, fall back to .ai/review_a.md, .ai/review_b.md, .ai/review_c.md in the current worktree.\nWrite: .ai/review_consensus.md.\n\nConsensus policy:\n- status=success when at least two reviews approve and no critical DoD/spec gap remains.\n- status=retry when remediation is needed.\n- status=fail only for unrecoverable blocking issues.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures."
+    ]
+
+    postmortem [
+        shape=box,
+        prompt="Goal: $goal\n\nAnalyze latest failure and define the next repair iteration.\nRead: .ai/review_consensus.md and .ai/implementation_log.md.\nIf review fanout artifacts are needed, read $KILROY_LOGS_ROOT/review_fanout/parallel_results.json and corresponding <worktree_dir>/.ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nWrite: .ai/postmortem_latest.md.\n\nOutput must include root cause, what worked, what failed, and specific next changes. Do not reset successful work.\n\nStatus contract:\n- Write canonical status JSON to $KILROY_STAGE_STATUS_PATH.\n- If unavailable, write the same JSON to $KILROY_STAGE_STATUS_FALLBACK_PATH.\n- Use schema {\"status\":\"...\"}.\n- Do not write nested status.json files after cd.\n- For status=fail or status=retry include failure_reason and details.\n- Include failure_class when classifying deterministic vs transient failures.\n\nSet status=success when .ai/postmortem_latest.md is written."
+    ]
+
+    start -> check_toolchain
+    check_toolchain -> check_toolchain_result
+    check_toolchain_result -> expand_spec [condition="outcome=success"]
+    check_toolchain_result -> check_toolchain [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_toolchain_result -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_toolchain_result -> postmortem
+
+    expand_spec -> check_dod
+    check_dod -> plan_fanout [condition="outcome=has_dod"]
+    check_dod -> dod_fanout [condition="outcome=needs_dod"]
+    check_dod -> postmortem [condition="outcome=fail"]
+    check_dod -> postmortem
+
+    dod_fanout -> dod_a
+    dod_fanout -> dod_b
+    dod_fanout -> dod_c
+    dod_a -> consolidate_dod
+    dod_b -> consolidate_dod
+    dod_c -> consolidate_dod
+    consolidate_dod -> plan_fanout [condition="outcome=success"]
+    consolidate_dod -> postmortem [condition="outcome=fail"]
+    consolidate_dod -> postmortem [condition="outcome=retry"]
+    consolidate_dod -> postmortem
+
+    plan_fanout -> plan_a
+    plan_fanout -> plan_b
+    plan_fanout -> plan_c
+    plan_a -> debate_consolidate
+    plan_b -> debate_consolidate
+    plan_c -> debate_consolidate
+    debate_consolidate -> implement [condition="outcome=success"]
+    debate_consolidate -> postmortem [condition="outcome=fail"]
+    debate_consolidate -> postmortem [condition="outcome=retry"]
+    debate_consolidate -> postmortem
+
+    implement -> check_implement
+    check_implement -> verify_fmt [condition="outcome=success"]
+    check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_implement -> postmortem
+
+    verify_fmt -> check_fmt
+    check_fmt -> verify_build [condition="outcome=success"]
+    check_fmt -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_fmt -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_fmt -> postmortem
+
+    verify_build -> check_build
+    check_build -> verify_test [condition="outcome=success"]
+    check_build -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_build -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_build -> postmortem
+
+    verify_test -> check_test
+    check_test -> verify_deliverable [condition="outcome=success"]
+    check_test -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_test -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_test -> postmortem
+
+    verify_deliverable -> check_deliverable
+    check_deliverable -> verify_artifacts [condition="outcome=success"]
+    check_deliverable -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_deliverable -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_deliverable -> postmortem
+
+    verify_artifacts -> check_artifacts
+    check_artifacts -> verify_fidelity [condition="outcome=success"]
+    check_artifacts -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_artifacts -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_artifacts -> postmortem
+
+    verify_fidelity -> check_fidelity
+    check_fidelity -> review_fanout [condition="outcome=success"]
+    check_fidelity -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_fidelity -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    check_fidelity -> postmortem
+
+    review_fanout -> review_a
+    review_fanout -> review_b
+    review_fanout -> review_c
+    review_a -> review_consensus
+    review_b -> review_consensus
+    review_c -> review_consensus
+
+    review_consensus -> exit [condition="outcome=success"]
+    review_consensus -> exit [condition="outcome=partial_success"]
+    review_consensus -> postmortem [condition="outcome=retry"]
+    review_consensus -> postmortem [condition="outcome=fail"]
+    review_consensus -> postmortem
+
+    postmortem -> check_toolchain [loop_restart=true]
 }
