@@ -3,6 +3,7 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
@@ -189,5 +190,20 @@ func TestReferenceTemplate_HasAutoFixBeforeVerifyFmt(t *testing.T) {
 	if !hasCheckImplementToFixFmt || !hasFixFmtToVerifyFmt {
 		t.Fatalf("missing fix_fmt routing: check_implement_to_fix_fmt=%v fix_fmt_to_verify_fmt=%v",
 			hasCheckImplementToFixFmt, hasFixFmtToVerifyFmt)
+	}
+}
+
+func TestReferenceTemplate_PostmortemPromptClarifiesStatusContract(t *testing.T) {
+	g, err := dot.Parse(loadReferenceTemplate(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	pm := g.Nodes["postmortem"]
+	if pm == nil {
+		t.Fatal("missing postmortem node")
+	}
+	prompt := pm.Attr("prompt", "")
+	if !strings.Contains(prompt, "whether you completed the analysis") {
+		t.Fatal("postmortem prompt must clarify that status reflects analysis completion, not implementation state")
 	}
 }
