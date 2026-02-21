@@ -116,6 +116,9 @@ Constraint fast path (`no fanout`):
 - Keep `implement -> check_implement -> deterministic verify/check -> semantic verify/review -> postmortem`.
 - Do not include `plan_a/b/c`, `review_a/b/c`, `component`, or `tripleoctagon` nodes.
 
+Auto-fix nodes:
+- When the language has a canonical formatter or auto-fixer (e.g. `gofmt -w .`, `cargo fmt`, `black .`, `prettier --write .`), insert a `shape=parallelogram` auto-fix node before the corresponding verify gate (e.g. `fix_fmt -> verify_fmt`). This makes the verify gate a pure assertion and avoids wasting hill-climbing iterations on trivially fixable formatting failures.
+
 Spec source rule:
 - Prefer an existing spec source (a user-provided path, `docs/`, etc.).
   - Either wire downstream prompts to read it directly, or copy it verbatim into the canonical `.ai/spec.md` via `expand_spec` so the rest of the pipeline has a stable path.
@@ -228,6 +231,9 @@ Mandatory status contract text (or equivalent) in generated prompts:
 - Use the canonical schema: `{"status":"..."}`
 - Routing conditions use `condition="outcome=..."` on edges; `outcome` is set to the stage's `status` value.
 - Require both variable names to appear verbatim in each codergen prompt.
+
+Auto-fix tool commands:
+- For each deterministic verify gate that has a language-canonical auto-fix command (formatter, import sorter, linter with `--fix`), populate the preceding fix node's `tool_command` with that command.
 
 Failure payload contract:
 - For `status=fail` or `status=retry`, include both `failure_reason` and `details`.
@@ -409,6 +415,10 @@ digraph project_pipeline {
   implement [shape=box, class="hard"]
   check_implement [shape=diamond]
 
+  fix_fmt [shape=parallelogram, max_retries=0]
+  verify_fmt [shape=parallelogram, max_retries=0]
+  check_fmt [shape=diamond]
+
   verify_build [shape=parallelogram]
   check_build [shape=diamond]
 
@@ -417,10 +427,15 @@ digraph project_pipeline {
 
   start -> implement
   implement -> check_implement
-  check_implement -> verify_build [condition="outcome=success"]
+  check_implement -> fix_fmt [condition="outcome=success"]
   check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
   check_implement -> postmortem
+  fix_fmt -> verify_fmt
+  verify_fmt -> check_fmt
+  check_fmt -> verify_build [condition="outcome=success"]
+  check_fmt -> postmortem [condition="outcome=fail"]
+  check_fmt -> postmortem
   verify_build -> check_build
   check_build -> review_consensus [condition="outcome=success"]
   check_build -> postmortem [condition="outcome=fail"]
