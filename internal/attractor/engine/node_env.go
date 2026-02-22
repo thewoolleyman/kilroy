@@ -40,7 +40,7 @@ var toolchainDefaults = map[string]string{
 //   - Starts from os.Environ()
 //   - Strips CLAUDECODE (nested session protection)
 //   - Pins toolchain paths to absolute values (immune to HOME overrides)
-//   - Sets CARGO_TARGET_DIR inside worktree to avoid EXDEV errors
+//   - Sets CARGO_TARGET_DIR to a worktree-adjacent runtime path
 //
 // Both ToolHandler and CodergenRouter should use this as their starting env,
 // then apply handler-specific overrides on top.
@@ -82,11 +82,12 @@ func buildBaseNodeEnv(worktreeDir string) []string {
 		}
 	}
 
-	// Set CARGO_TARGET_DIR inside the worktree to avoid EXDEV errors
-	// when cargo moves intermediate artifacts across filesystem boundaries.
+	// Set CARGO_TARGET_DIR to a sibling of the worktree so engine-managed
+	// build artifacts do not show up as untracked git files inside the
+	// execution tree while still staying on the same filesystem.
 	// Harmless for non-Rust projects (unused env var).
 	if worktreeDir != "" && strings.TrimSpace(os.Getenv("CARGO_TARGET_DIR")) == "" {
-		toolchainOverrides["CARGO_TARGET_DIR"] = filepath.Join(worktreeDir, ".cargo-target")
+		toolchainOverrides["CARGO_TARGET_DIR"] = defaultCargoTargetDir(worktreeDir)
 	}
 
 	env := mergeEnvWithOverrides(base, toolchainOverrides)
@@ -94,6 +95,18 @@ func buildBaseNodeEnv(worktreeDir string) []string {
 	// Strip CLAUDECODE — it prevents the Claude CLI from launching
 	// (nested session protection). All handler types need this stripped.
 	return stripEnvKey(env, "CLAUDECODE")
+}
+
+func defaultCargoTargetDir(worktreeDir string) string {
+	wt := filepath.Clean(strings.TrimSpace(worktreeDir))
+	if wt == "" || wt == "." {
+		return ".kilroy-cargo-target"
+	}
+	base := filepath.Base(wt)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return filepath.Join(filepath.Dir(wt), ".kilroy-cargo-target")
+	}
+	return filepath.Join(filepath.Dir(wt), "."+base+"-cargo-target")
 }
 
 // stripEnvKey removes all entries with the given key from an env slice.
@@ -154,12 +167,12 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 		return ""
 	}
 	return strings.TrimSpace(
-		"Execution context:\n"+
-			"- $"+runIDEnvKey+"="+runID+"\n"+
-			"- $"+logsRootEnvKey+"="+logsRoot+"\n"+
-			"- $"+stageLogsDirEnvKey+"="+stageDir+"\n"+
-			"- $"+worktreeDirEnvKey+"="+worktree+"\n"+
-			"- $"+nodeIDEnvKey+"="+strings.TrimSpace(nodeID)+"\n",
+		"Execution context:\n" +
+			"- $" + runIDEnvKey + "=" + runID + "\n" +
+			"- $" + logsRootEnvKey + "=" + logsRoot + "\n" +
+			"- $" + stageLogsDirEnvKey + "=" + stageDir + "\n" +
+			"- $" + worktreeDirEnvKey + "=" + worktree + "\n" +
+			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n",
 	)
 }
 

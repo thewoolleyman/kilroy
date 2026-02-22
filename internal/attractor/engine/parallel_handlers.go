@@ -180,7 +180,7 @@ func dispatchParallelBranches(
 
 	// Kilroy git model: create the checkpoint commit FIRST so branch work is a descendant.
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
-	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
+	baseSHA, err := exec.Engine.commitAllowEmptyCheckpoint(msg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -387,6 +387,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		Graph:              exec.Graph,
 		Options:            exec.Engine.Options,
 		DotSource:          exec.Engine.DotSource,
+		RunConfig:          exec.Engine.RunConfig,
 		RunBranch:          branchName,
 		WorktreeDir:        worktreeDir,
 		LogsRoot:           branchRoot,

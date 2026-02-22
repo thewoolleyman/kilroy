@@ -32,8 +32,8 @@ func TestBuildBaseNodeEnv_PreservesToolchainPaths(t *testing.T) {
 	if got := envLookup(env, "GOPATH"); got != gopath {
 		t.Fatalf("GOPATH: got %q want %q", got, gopath)
 	}
-	if got := envLookup(env, "CARGO_TARGET_DIR"); got != filepath.Join(worktree, ".cargo-target") {
-		t.Fatalf("CARGO_TARGET_DIR: got %q want %q", got, filepath.Join(worktree, ".cargo-target"))
+	if got := envLookup(env, "CARGO_TARGET_DIR"); got != defaultCargoTargetDir(worktree) {
+		t.Fatalf("CARGO_TARGET_DIR: got %q want %q", got, defaultCargoTargetDir(worktree))
 	}
 }
 
@@ -81,14 +81,17 @@ func TestBuildBaseNodeEnv_GoModCacheUsesFirstGOPATHEntry(t *testing.T) {
 	}
 }
 
-func TestBuildBaseNodeEnv_SetsCargoTargetDirToWorktree(t *testing.T) {
+func TestBuildBaseNodeEnv_SetsCargoTargetDirOutsideWorktree(t *testing.T) {
 	worktree := t.TempDir()
 	env := buildBaseNodeEnv(worktree)
 
 	got := envLookup(env, "CARGO_TARGET_DIR")
-	want := filepath.Join(worktree, ".cargo-target")
+	want := defaultCargoTargetDir(worktree)
 	if got != want {
 		t.Fatalf("CARGO_TARGET_DIR: got %q want %q", got, want)
+	}
+	if rel, err := filepath.Rel(worktree, got); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("CARGO_TARGET_DIR should not be inside worktree: worktree=%q target=%q rel=%q", worktree, got, rel)
 	}
 }
 

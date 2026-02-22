@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -271,7 +270,7 @@ func dispatchParallelBranchesStreaming(
 	}
 
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
-	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
+	baseSHA, err := exec.Engine.commitAllowEmptyCheckpoint(msg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -365,13 +364,13 @@ func dispatchParallelBranchesStreaming(
 			if shouldCancel {
 				terminated = true
 				exec.Engine.appendProgress(map[string]any{
-					"event":        "early_termination",
-					"node_id":      sourceNodeID,
-					"reason":       reason,
-					"received":     received,
-					"total":        total,
+					"event":          "early_termination",
+					"node_id":        sourceNodeID,
+					"reason":         reason,
+					"received":       received,
+					"total":          total,
 					"success_so_far": successSoFar,
-					"fail_so_far":   failSoFar,
+					"fail_so_far":    failSoFar,
 				})
 				cancel() // Cancel remaining branches immediately.
 			}

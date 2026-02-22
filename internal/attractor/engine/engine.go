@@ -1320,7 +1320,7 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 	}
 	if sha == "" {
 		var err error
-		sha, err = gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
+		sha, err = e.commitAllowEmptyCheckpoint(msg)
 		if err != nil {
 			return "", err
 		}
@@ -1369,6 +1369,13 @@ func (e *Engine) checkpointExcludeGlobs() []string {
 		return nil
 	}
 	return append([]string{}, e.RunConfig.Git.CheckpointExcludeGlobs...)
+}
+
+func (e *Engine) commitAllowEmptyCheckpoint(message string) (string, error) {
+	if e == nil {
+		return "", fmt.Errorf("engine is nil")
+	}
+	return gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, message, e.checkpointExcludeGlobs())
 }
 
 func (e *Engine) writeManifest(baseSHA string) error {
