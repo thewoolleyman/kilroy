@@ -168,6 +168,34 @@ func TestSetupCommands_FailsOnError_StopsEarly(t *testing.T) {
 	}
 }
 
+func TestSetupCommands_BackgroundDaemonDoesNotFail(t *testing.T) {
+	worktree := t.TempDir()
+	logsRoot := t.TempDir()
+
+	// This command exits 0 immediately but leaves a background child holding
+	// stdout open, which triggers exec.ErrWaitDelay after WaitDelay expires.
+	// The engine should treat this as success, not failure.
+	e := &Engine{
+		LogsRoot:    logsRoot,
+		WorktreeDir: worktree,
+		Options:     RunOptions{RunID: "test-bg-daemon"},
+		RunConfig: &RunConfigFile{
+			Setup: struct {
+				Commands  []string `json:"commands,omitempty" yaml:"commands,omitempty"`
+				TimeoutMS int      `json:"timeout_ms,omitempty" yaml:"timeout_ms,omitempty"`
+			}{
+				Commands:  []string{"sh -c 'sleep 60 & echo started'"},
+				TimeoutMS: 30000,
+			},
+		},
+	}
+
+	err := e.executeSetupCommands(context.Background())
+	if err != nil {
+		t.Fatalf("expected success when background daemon holds pipes open, got: %v", err)
+	}
+}
+
 func TestSetupCommands_Timeout(t *testing.T) {
 	worktree := t.TempDir()
 	logsRoot := t.TempDir()

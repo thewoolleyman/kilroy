@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -50,7 +51,15 @@ func (e *Engine) executeSetupCommands(ctx context.Context) error {
 		cmd.Stderr = &stderr
 
 		err := cmd.Run()
-		if err != nil {
+		if errors.Is(err, exec.ErrWaitDelay) {
+			e.appendProgress(map[string]any{
+				"event":   "setup_command_ok",
+				"index":   i,
+				"command": cmdStr,
+				"stdout":  strings.TrimSpace(stdout.String()),
+				"warning": "child process held I/O pipes open past WaitDelay; treated as success",
+			})
+		} else if err != nil {
 			e.appendProgress(map[string]any{
 				"event":   "setup_command_failed",
 				"index":   i,
@@ -60,14 +69,14 @@ func (e *Engine) executeSetupCommands(ctx context.Context) error {
 				"stderr":  strings.TrimSpace(stderr.String()),
 			})
 			return fmt.Errorf("setup command [%d] %q failed: %w", i, cmdStr, err)
+		} else {
+			e.appendProgress(map[string]any{
+				"event":   "setup_command_ok",
+				"index":   i,
+				"command": cmdStr,
+				"stdout":  strings.TrimSpace(stdout.String()),
+			})
 		}
-
-		e.appendProgress(map[string]any{
-			"event":   "setup_command_ok",
-			"index":   i,
-			"command": cmdStr,
-			"stdout":  strings.TrimSpace(stdout.String()),
-		})
 	}
 
 	return nil
