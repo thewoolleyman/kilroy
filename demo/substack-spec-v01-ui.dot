@@ -2,37 +2,31 @@ digraph SubstackCreatorUI {
   graph [
     label="Substack Creator UI: Screen and Information Flow",
     labelloc=t,
-    fontsize=18,
     fontname="Helvetica",
+    labelfontname="Times New Roman",
+    labelfontsize=24,
     rankdir=LR,
     splines=polyline,
     nodesep=0.55,
     ranksep=0.8,
     compound=true,
-    newrank=true,
-    bgcolor="white"
+    newrank=true
   ];
 
   node [
     shape=box,
     style="rounded,filled",
-    fillcolor="#FFFFFF",
-    color="#6B7280",
-    penwidth=1.2,
-    fontname="Helvetica",
-    fontsize=10
+    fontname="Helvetica"
   ];
 
   edge [
-    color="#4B5563",
     arrowsize=0.7,
     fontname="Helvetica",
     fontsize=9
   ];
 
   subgraph cluster_entry {
-    label="Entry";
-    color="#D1D5DB";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Entry</B></FONT>>;
     style="rounded";
 
     app_start [
@@ -40,27 +34,17 @@ digraph SubstackCreatorUI {
       shape=circle,
       fixedsize=true,
       width=1.05,
-      style="filled,bold",
-      fillcolor="#DBEAFE",
-      color="#1D4ED8",
-      fontcolor="#1E3A8A",
-      penwidth=2.0
+      style="filled,bold"
     ];
-    first_run [label="First run?", shape=diamond, fillcolor="#EEF2FF", color="#6366F1"];
+    first_run [label="First run?", shape=diamond];
   }
 
   subgraph cluster_setup {
-    label="Setup Settings (parallel options)";
-    color="#93C5FD";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Setup Settings (parallel options)</B></FONT>>;
     style="rounded";
 
     settings_page [
-      label="Settings Hub\n(status icons show incomplete items)",
-      fillcolor="#DBEAFE",
-      color="#1D4ED8",
-      fontcolor="#1E3A8A",
-      penwidth=2.0,
-      fontsize=12
+      label="Settings Hub\n(status icons show incomplete items)"
     ];
     api_key [label="API Key Setup"];
     define_company [label="Identify Company"];
@@ -69,36 +53,33 @@ digraph SubstackCreatorUI {
     confirm_voice [label="Confirm Voice"];
     define_guardrails [label="Define Guardrails"];
     confirm_guardrails [label="Confirm Guardrails"];
-    reset_confirm [label="Reset Everything\n(confirm required)", shape=octagon, fillcolor="#FEF2F2", color="#DC2626"];
+    reset_confirm [label="Reset Everything\n(confirm required)", shape=octagon];
 
     {rank=same; api_key; define_company; define_voice; define_guardrails;}
     {rank=same; confirm_company; confirm_voice; confirm_guardrails;}
   }
 
   subgraph cluster_dashboard {
-    label="Dashboard";
-    color="#A7F3D0";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Dashboard</B></FONT>>;
     style="rounded";
 
-    dashboard [label="Dashboard", fillcolor="#ECFDF5", color="#059669"];
-    posts_drafts [label="Past Posts + Drafts", fillcolor="#F0FDF4"];
-    post_viewer [label="Post Viewer", fillcolor="#F0FDF4"];
+    dashboard [label="Dashboard"];
+    posts_drafts [label="Past Posts + Drafts"];
+    post_viewer [label="Post Viewer"];
   }
 
   subgraph cluster_trending {
-    label="Trending Topics Flow";
-    color="#FCD34D";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Trending Topics Flow</B></FONT>>;
     style="rounded";
 
-    trending_topics [label="Trending Topics Page", fillcolor="#FFFBEB", color="#D97706"];
-    trend_fetch [label="Flash grounded research calls\n(parallel)", shape=parallelogram, fillcolor="#FFFBEB", color="#D97706"];
-    trend_map [label="Deterministic trend visualization", fillcolor="#FFFBEB"];
-    trending_prompts [label="3 Pro-generated prompts", fillcolor="#FFFBEB"];
+    trending_topics [label="Trending Topics Page"];
+    trend_fetch [label="Flash grounded research calls\n(parallel)", shape=parallelogram];
+    trend_map [label="Deterministic trend visualization"];
+    trending_prompts [label="3 Pro-generated prompts"];
   }
 
   subgraph cluster_new_post {
-    label="New Post Flow";
-    color="#C4B5FD";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>New Post Flow</B></FONT>>;
     style="rounded";
 
     topic [label="1. Topic"];
@@ -109,13 +90,12 @@ digraph SubstackCreatorUI {
   }
 
   subgraph cluster_demo {
-    label="Demo Replay Flow";
-    color="#F9A8D4";
+    label=<<FONT FACE="Times New Roman" POINT-SIZE="22"><B>Demo Replay Flow</B></FONT>>;
     style="rounded";
 
-    demo_picker [label="Demo Session Picker", fillcolor="#FDF2F8", color="#BE185D"];
-    demo_replay [label="Replay Session\n(internally replays setup + post flow)", fillcolor="#FDF2F8"];
-    demo_error [label="Cache-miss Error", fillcolor="#FFF1F2", color="#E11D48"];
+    demo_picker [label="Demo Session Picker"];
+    demo_replay [label="Replay Session\n(internally replays setup + post flow)"];
+    demo_error [label="Cache-miss Error"];
   }
 
   app_start -> first_run;
@@ -126,7 +106,7 @@ digraph SubstackCreatorUI {
   settings_page -> define_company [label="Open"];
   settings_page -> define_voice [label="Open"];
   settings_page -> define_guardrails [label="Open"];
-  settings_page -> reset_confirm [label="Subtle option", style=dashed, color="#DC2626"];
+  settings_page -> reset_confirm [label="Subtle option", style=dashed];
   settings_page -> dashboard [label="All required complete"];
 
   api_key -> settings_page [label="Saved"];
@@ -144,7 +124,7 @@ digraph SubstackCreatorUI {
   confirm_guardrails -> settings_page [label="Done"];
 
   reset_confirm -> settings_page [label="Cancel"];
-  reset_confirm -> app_start [label="Confirm delete all", color="#DC2626", fontcolor="#DC2626"];
+  reset_confirm -> app_start [label="Confirm delete all"];
 
   dashboard -> settings_page [label="Settings"];
   dashboard -> topic [label="New Post"];
