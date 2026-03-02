@@ -67,6 +67,7 @@ func TestClassifyFailureClass_AllHeuristicPatterns(t *testing.T) {
 		{name: "transient: 502 in reason", failureReason: "upstream returned 502", want: failureClassTransientInfra},
 		{name: "transient: 503 in reason", failureReason: "upstream returned 503", want: failureClassTransientInfra},
 		{name: "transient: 504 in reason", failureReason: "upstream returned 504", want: failureClassTransientInfra},
+		{name: "transient: net::ERR_INTERNET_DISCONNECTED", failureReason: "page.goto failed: net::ERR_INTERNET_DISCONNECTED", want: failureClassTransientInfra},
 
 		// ── canceled ─────────────────────────────────────────────────────────────
 		{name: "canceled: canceled spelling", failureReason: "run was canceled by operator", want: failureClassCanceled},
@@ -97,6 +98,9 @@ func TestClassifyFailureClass_AllHeuristicPatterns(t *testing.T) {
 		{name: "deterministic: empty reason", failureReason: "", want: failureClassDeterministic},
 		{name: "deterministic: assertion failure", failureReason: "assertion failed: expected foo got bar", want: failureClassDeterministic},
 		{name: "deterministic: contract mismatch", failureReason: "provider contract mismatch: missing field X", want: failureClassDeterministic},
+		{name: "deterministic: playwright browser launch failed (missing deps)", failureReason: "browserType.launch: Host system is missing dependencies", want: failureClassDeterministic},
+		{name: "deterministic: playwright executable missing", failureReason: "browserType.launch: Executable doesn't exist at /home/user/.cache/ms-playwright/chromium", want: failureClassDeterministic},
+		{name: "deterministic: playwright install hint", failureReason: "Please run the following command to download new browsers: npx playwright install", want: failureClassDeterministic},
 	}
 
 	for _, tc := range cases {
@@ -256,7 +260,7 @@ func TestTransientInfraReasonHints_ShadowedEntriesExist(t *testing.T) {
 // TestTransientInfraReasonHints_Count guards the slice length so that adding
 // or removing hints requires an explicit update to this test.
 func TestTransientInfraReasonHints_Count(t *testing.T) {
-	const want = 37
+	const want = 38
 	if got := len(transientInfraReasonHints); got != want {
 		t.Fatalf("len(transientInfraReasonHints) = %d, want %d; update this test when adding/removing hints", got, want)
 	}

@@ -36,6 +36,7 @@ var (
 		"could not resolve hostname",
 		"temporary failure in name resolution",
 		"network is unreachable",
+		"net::err_internet_disconnected",
 		"broken pipe",
 		"tls handshake timeout",
 		"i/o timeout",
