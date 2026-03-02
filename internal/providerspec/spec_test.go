@@ -120,27 +120,14 @@ func TestBuiltinInceptionDefaultsToOpenAICompatAPI(t *testing.T) {
 	}
 }
 
-func TestBuiltinFailoverDefaultsAreSingleHop(t *testing.T) {
-	cases := []struct {
-		provider string
-		want     []string
-	}{
-		{provider: "openai", want: []string{"google"}},
-		{provider: "anthropic", want: []string{"google"}},
-		{provider: "google", want: []string{"kimi"}},
-		{provider: "kimi", want: []string{"zai"}},
-		{provider: "zai", want: []string{"cerebras"}},
-		{provider: "cerebras", want: []string{"zai"}},
-		{provider: "minimax", want: []string{"cerebras"}},
-		{provider: "inception", want: []string{"cerebras"}},
-	}
-	for _, tc := range cases {
-		spec, ok := Builtin(tc.provider)
+func TestBuiltinFailoverDefaultsAreEmpty(t *testing.T) {
+	for _, provider := range []string{"openai", "anthropic", "google", "kimi", "zai", "cerebras", "minimax", "inception"} {
+		spec, ok := Builtin(provider)
 		if !ok {
-			t.Fatalf("expected builtin provider %q", tc.provider)
+			t.Fatalf("expected builtin provider %q", provider)
 		}
-		if len(spec.Failover) != 1 || spec.Failover[0] != tc.want[0] {
-			t.Fatalf("%s failover=%v want %v", tc.provider, spec.Failover, tc.want)
+		if len(spec.Failover) != 0 {
+			t.Fatalf("%s failover=%v want []", provider, spec.Failover)
 		}
 	}
 }
