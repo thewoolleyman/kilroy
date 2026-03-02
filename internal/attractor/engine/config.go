@@ -59,13 +59,15 @@ type PreflightConfig struct {
 }
 
 type InputMaterializationConfig struct {
-	Enabled          *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Include          []string `json:"include,omitempty" yaml:"include,omitempty"`
-	DefaultInclude   []string `json:"default_include,omitempty" yaml:"default_include,omitempty"`
-	FollowReferences *bool    `json:"follow_references,omitempty" yaml:"follow_references,omitempty"`
-	InferWithLLM     *bool    `json:"infer_with_llm,omitempty" yaml:"infer_with_llm,omitempty"`
-	LLMModel         string   `json:"llm_model,omitempty" yaml:"llm_model,omitempty"`
-	LLMProvider      string   `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`
+	Enabled          *bool                           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Include          []string                        `json:"include,omitempty" yaml:"include,omitempty"`
+	DefaultInclude   []string                        `json:"default_include,omitempty" yaml:"default_include,omitempty"`
+	Imports          []InputImportEntry              `json:"imports,omitempty" yaml:"imports,omitempty"`
+	FanIn            InputMaterializationFanInConfig `json:"fan_in,omitempty" yaml:"fan_in,omitempty"`
+	FollowReferences *bool                           `json:"follow_references,omitempty" yaml:"follow_references,omitempty"`
+	InferWithLLM     *bool                           `json:"infer_with_llm,omitempty" yaml:"infer_with_llm,omitempty"`
+	LLMModel         string                          `json:"llm_model,omitempty" yaml:"llm_model,omitempty"`
+	LLMProvider      string                          `json:"llm_provider,omitempty" yaml:"llm_provider,omitempty"`
 }
 
 type InputConfig struct {
@@ -148,6 +150,18 @@ func LoadRunConfigFile(path string) (*RunConfigFile, error) {
 			return nil, err
 		}
 	}
+	presence, err := detectMaterializeFieldPresence(path, b)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Inputs.Materialize.normalizeImports(presence); err != nil {
+		return nil, err
+	}
+	normalizedPromote, err := normalizeAndValidatePromoteRunScoped(cfg.Inputs.Materialize.FanIn.PromoteRunScoped)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Inputs.Materialize.FanIn.PromoteRunScoped = normalizedPromote
 	applyConfigDefaults(&cfg)
 	if err := validateConfig(&cfg); err != nil {
 		return nil, err
@@ -282,9 +296,6 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if cfg.Inputs.Materialize.InferWithLLM == nil {
 		v := false
 		cfg.Inputs.Materialize.InferWithLLM = &v
-	}
-	if len(cfg.Inputs.Materialize.DefaultInclude) == 0 {
-		cfg.Inputs.Materialize.DefaultInclude = []string{".ai/*.md"}
 	}
 }
 

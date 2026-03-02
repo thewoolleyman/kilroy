@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -445,8 +446,8 @@ modeldb:
 		if m.InferWithLLM == nil || *m.InferWithLLM {
 			t.Fatal("inputs.materialize.infer_with_llm default: expected false")
 		}
-		if got, want := strings.Join(m.DefaultInclude, ","), ".ai/*.md"; got != want {
-			t.Fatalf("inputs.materialize.default_include default: got %q want %q", got, want)
+		if len(m.DefaultInclude) != 0 {
+			t.Fatalf("inputs.materialize.default_include default: got %v want empty", m.DefaultInclude)
 		}
 	})
 
@@ -473,6 +474,373 @@ inputs:
 			t.Fatalf("expected llm_provider validation error, got: %v", err)
 		}
 	})
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsMapping(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/requirements.md
+        required: true
+      - pattern: docs/context/*.md
+        required: false
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.Include, ","); got != "docs/requirements.md" {
+		t.Fatalf("include=%q", got)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.DefaultInclude, ","); got != "docs/context/*.md" {
+		t.Fatalf("default_include=%q", got)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsConflict(t *testing.T) {
+	_, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    include: [docs/required.md]
+    imports:
+      - pattern: docs/required.md
+`))
+	if err == nil || !strings.Contains(err.Error(), "failure_reason=input_imports_conflict") {
+		t.Fatalf("expected deterministic failure_reason=input_imports_conflict, got %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsDefaultIncludeConflict(t *testing.T) {
+	_, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    default_include: [docs/optional/*.md]
+    imports:
+      - pattern: docs/required.md
+`))
+	if err == nil || !strings.Contains(err.Error(), "failure_reason=input_imports_conflict") {
+		t.Fatalf("expected deterministic failure_reason=input_imports_conflict, got %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsConflict_ExplicitEmptyLegacyFields(t *testing.T) {
+	tests := []string{
+		`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    include: []
+    imports:
+      - pattern: docs/required.md
+`,
+		`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    default_include: []
+    imports:
+      - pattern: docs/required.md
+`,
+	}
+	for _, yml := range tests {
+		_, err := loadRunConfigFromBytesForTest(t, []byte(yml))
+		if err == nil || !strings.Contains(err.Error(), "failure_reason=input_imports_conflict") {
+			t.Fatalf("expected deterministic failure_reason=input_imports_conflict, got %v", err)
+		}
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsPatternRequired(t *testing.T) {
+	_, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: "   "
+`))
+	if err == nil || !strings.Contains(err.Error(), "inputs.materialize.imports[0].pattern") {
+		t.Fatalf("expected imports pattern validation error, got %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsRequiredDefaultsTrue(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/required.md
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.Include, ","); got != "docs/required.md" {
+		t.Fatalf("required defaults to include, got %q", got)
+	}
+	if len(cfg.Inputs.Materialize.DefaultInclude) != 0 {
+		t.Fatalf("default_include must be empty, got %v", cfg.Inputs.Materialize.DefaultInclude)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsDedupeFirstSeenOrder(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/a.md
+      - pattern: docs/a.md
+      - pattern: docs/b.md
+        required: false
+      - pattern: docs/b.md
+        required: false
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.Include, ","); got != "docs/a.md" {
+		t.Fatalf("include dedupe/order mismatch: %q", got)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.DefaultInclude, ","); got != "docs/b.md" {
+		t.Fatalf("default_include dedupe/order mismatch: %q", got)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsDedupe_FirstRequiredWins(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/shared.md
+        required: true
+      - pattern: docs/shared.md
+        required: false
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.Include, ","); got != "docs/shared.md" {
+		t.Fatalf("include first-seen winner mismatch: %q", got)
+	}
+	if len(cfg.Inputs.Materialize.DefaultInclude) != 0 {
+		t.Fatalf("default_include must not duplicate first-seen pattern, got %v", cfg.Inputs.Materialize.DefaultInclude)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsDedupe_FirstBestEffortWins(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/shared.md
+        required: false
+      - pattern: docs/shared.md
+        required: true
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if len(cfg.Inputs.Materialize.Include) != 0 {
+		t.Fatalf("include must remain empty when first-seen import is best-effort, got %v", cfg.Inputs.Materialize.Include)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.DefaultInclude, ","); got != "docs/shared.md" {
+		t.Fatalf("default_include first-seen winner mismatch: %q", got)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsUnknownFieldRejected(t *testing.T) {
+	_, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    imports:
+      - pattern: docs/required.md
+        extra: nope
+`))
+	if err == nil || !strings.Contains(err.Error(), "extra") {
+		t.Fatalf("expected unknown imports field error, got %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationLegacyIncludeDefaultIncludeStillWorks(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    include: [docs/required.md]
+    default_include: [docs/optional/*.md]
+`))
+	if err != nil {
+		t.Fatalf("legacy include/default_include must remain valid: %v", err)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.Include, ","); got != "docs/required.md" {
+		t.Fatalf("include mismatch: %q", got)
+	}
+	if got := strings.Join(cfg.Inputs.Materialize.DefaultInclude, ","); got != "docs/optional/*.md" {
+		t.Fatalf("default_include mismatch: %q", got)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationFanInPromoteValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "absolute", entry: "/tmp/postmortem_latest.md"},
+		{name: "windows-absolute", entry: "C:/tmp/postmortem_latest.md"},
+		{name: "dotdot", entry: "../outside.md"},
+		{name: "embedded-dotdot", entry: "safe/../escape.md"},
+		{name: "empty", entry: "\"   \""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadRunConfigFromBytesForTest(t, []byte(fmt.Sprintf(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    fan_in:
+      promote_run_scoped: [%s]
+`, tc.entry)))
+			if err == nil || !strings.Contains(err.Error(), "promote_run_scoped") {
+				t.Fatalf("expected promote_run_scoped validation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationFanInPromoteNormalizeAndDedupe(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    fan_in:
+      promote_run_scoped:
+        - postmortem_latest.md
+        - ./postmortem_latest.md
+        - review_final.md
+`))
+	if err != nil {
+		t.Fatalf("expected valid promote_run_scoped list, got %v", err)
+	}
+	got := strings.Join(cfg.Inputs.Materialize.FanIn.PromoteRunScoped, ",")
+	want := "postmortem_latest.md,review_final.md"
+	if got != want {
+		t.Fatalf("promote_run_scoped normalize+dedupe: got %q want %q", got, want)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationFanInPromoteAllowsGlob(t *testing.T) {
+	_, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+inputs:
+  materialize:
+    fan_in:
+      promote_run_scoped:
+        - "**/review_*.md"
+`))
+	if err != nil {
+		t.Fatalf("glob entries must be accepted in config validation: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationImportsConflict_JSONExplicitEmptyLegacyFields(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "run.json")
+	if err := os.WriteFile(p, []byte(`{
+  "version": 1,
+  "repo": {"path": "/tmp/repo"},
+  "cxdb": {"binary_addr":"127.0.0.1:9009","http_base_url":"http://127.0.0.1:9010"},
+  "llm": {"providers": {"openai": {"backend":"api"}}},
+  "modeldb": {"openrouter_model_info_path":"/tmp/catalog.json"},
+  "inputs": {"materialize": {"include": [], "imports": [{"pattern":"docs/required.md"}]}}
+}`), 0o644); err != nil {
+		t.Fatalf("write run.json: %v", err)
+	}
+	_, err := LoadRunConfigFile(p)
+	if err == nil || !strings.Contains(err.Error(), "failure_reason=input_imports_conflict") {
+		t.Fatalf("expected deterministic failure_reason=input_imports_conflict, got %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InputMaterializationDefaults_NoImplicitRootAI(t *testing.T) {
+	cfg, err := loadRunConfigFromBytesForTest(t, []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+llm: { providers: { openai: { backend: api } } }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+`))
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile: %v", err)
+	}
+	if len(cfg.Inputs.Materialize.DefaultInclude) != 0 {
+		t.Fatalf("default_include default must be empty, got %v", cfg.Inputs.Materialize.DefaultInclude)
+	}
 }
 
 func TestLoadRunConfig_CustomAPIProviderRequiresProtocol(t *testing.T) {
