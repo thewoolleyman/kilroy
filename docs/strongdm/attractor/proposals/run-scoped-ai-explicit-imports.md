@@ -1,186 +1,213 @@
-# Proposal: Run-Scoped `.ai` Workspace with Spec-Aligned Materialization
+# Proposal: Run-Scoped `.ai` Workspace with Branch-Safe Materialization
 
 ## Problem
 
 The March 2, 2026 incident (`run_id=01KJPDK649C65Y07TBX1041C73`) exposed two
-issues:
+separate failures:
 
-1. **Immediate failure mode (confirmed):** stale local `./kilroy` binary
-   (`cee6fe8e...`) used old `copyInputFile` behavior that truncated same-path
-   copies to zero bytes.
-2. **Input boundary gap:** startup materialization implicitly copied gitignored
-   repo-local `.ai/*.md` from the developer checkout, which introduced stale
-   Solitaire content into the run.
+1. stale binary behavior (`cee6fe8e...`) truncated same-path copies to zero
+   bytes
+2. startup materialization implicitly copied gitignored repo-local `.ai/*.md`,
+   which pulled stale Solitaire content into the run
+
+The stale-binary bug is resolved separately. This proposal fixes the input
+boundary and durability model so the same class of incident does not recur.
 
 ## Evidence Anchors
 
-1. Incident run id: `01KJPDK649C65Y07TBX1041C73` (March 2, 2026).
-2. Binary mismatch from investigation:
-   - run base SHA: `45b3956c...`
-   - local build SHA: `cee6fe8e...` (stale)
-3. Solitaire provenance:
-   - source: `/home/user/code/kilroy/.ai/spec.md` (gitignored local scratch)
-   - copied into startup snapshot/worktree
-   - SHA256 match:
-     `1f94094f76eeb687e0aabd4eca1c646edf8952ca7bc86ff1048f2f95604c3b5d`
-4. Stale-binary truncation produced repeated 0-byte `.ai` files at stage start.
+1. incident run id: `01KJPDK649C65Y07TBX1041C73`
+2. run base SHA vs local binary SHA mismatch was confirmed
+3. Solitaire source was `/home/user/code/kilroy/.ai/spec.md` and hash-matched
+   the startup snapshot copy
+4. parallel worktree recreation amplified bad state because untracked `.ai`
+   content is not present in fresh worktrees
 
-## Normative Alignment (Required)
+## Scope
 
-This proposal preserves the Attractor spec contracts:
+This proposal changes workspace-state handling for materialized inputs and
+run-scoped scratch files. It does not move canonical run/stage logs away from
+`logs_root`.
 
-1. **Canonical run/stage artifacts remain under `logs_root`.**
-   - `checkpoint.json`, run `manifest.json`, stage `status.json`, `prompt.md`,
-     `response.md`, artifacts directory.
-2. **Input materialization C.1 semantics are preserved verbatim.**
-   - transitive closure when `follow_references=true`
-   - `include` fail-on-unmatched with deterministic
-     `failure_reason=input_include_missing`
-   - `default_include` best-effort
-   - `infer_with_llm` additive with scanner-only fallback on inferer failure
-3. **Manifest coverage remains required at all levels.**
-   - run-level: `logs_root/inputs_manifest.json`
-   - branch-level: `<branch_logs_root>/inputs_manifest.json`
-   - stage-level: `logs_root/<node_id>/inputs_manifest.json`
-4. **`KILROY_INPUTS_MANIFEST_PATH` remains the required runtime contract.**
-   - no new required env var in this proposal.
+## Normative Constraints This Proposal Keeps
+
+When `inputs.materialize.enabled=true`, the current Appendix C.1 contracts stay
+intact:
+
+1. run startup snapshot under `logs_root/input_snapshot/`
+2. run-level manifest at `logs_root/inputs_manifest.json`
+3. branch-level manifests at `<branch_logs_root>/inputs_manifest.json`
+4. stage-level manifests at `logs_root/<node_id>/inputs_manifest.json`
+5. `KILROY_INPUTS_MANIFEST_PATH` exposed to stage runtimes
+6. `include` fail-on-unmatched with
+   `failure_reason=input_include_missing`
+7. `default_include` best-effort
+8. transitive closure when `follow_references=true`
+9. additive `infer_with_llm` fallback to scanner-only closure on inferer failure
+
+When `inputs.materialize.enabled=false`, materialization manifests/env injection
+remain suppressed, matching current tests and runtime behavior.
 
 ## Decision
 
-Adopt this runtime boundary model:
+Adopt this boundary:
 
-1. `.ai` in the worktree is **stage-visible run workspace state only**, scoped
-   to `./.ai/runs/<run_id>/...`.
-2. Shared project inputs remain outside `.ai` (for example `docs/`, `specs/`,
-   `policies/`), tracked and reviewed in normal Git workflows.
-3. Repo-level `.ai/*` ingestion is disabled by default to prevent accidental
-   import of local scratch files.
-4. Hydration for linear, parallel, and resume paths must come from persisted
-   snapshot/manifest state under `logs_root`, not mutable developer workspace
-   state.
+1. stage-visible run scratch files live under
+   `./.ai/runs/<run_id>/...` in each active worktree
+2. shared source-of-truth inputs stay outside `.ai` (for example `docs/`,
+   `specs/`, `policies/`)
+3. implicit repo-root `.ai/*` ingestion is disabled by default
+4. branch/resume hydration uses persisted snapshot state, not mutable developer
+   workspace state
 
-## Why This Is Correct For Worktrees
+## Branch-Safe Snapshot Lineage
 
-When a new worktree is recreated from `HEAD`, untracked `.ai/*` content is
-absent by definition. Therefore Git cannot be the durability path for `.ai`.
+The previous draft used a single "latest revision" model. That is not safe for
+parallel branches. This proposal uses explicit lineage.
 
-Durability comes from persisted materialization state:
+### Run Startup
 
-1. Persisted snapshots/manifests under `logs_root`.
-2. Deterministic hydration before stage execution (including branch and resume).
-3. Stage-local manifest path contract via `KILROY_INPUTS_MANIFEST_PATH`.
+1. create run snapshot revision `R0` at startup under
+   `logs_root/input_snapshot/`
+2. set run head pointer to `R0`
 
-This keeps code checkout isolation (worktrees) separate from run-state
-durability (materialization).
+### Fan-Out Branch Fork
 
-## Proposed Design
+1. for each branch `B`, create branch lineage rooted at current run head
+2. persist branch lineage metadata in `<branch_logs_root>/inputs_manifest.json`
+   with `base_run_revision=<Rn>` and `branch_head_revision=<B0>`
+3. branch hydration reads from branch head only
 
-### 1. Input Declaration (Spec-Preserving)
+### Branch Execution
 
-- Keep existing `inputs.materialize` controls and semantics.
-- Introduce an explicit import declaration that compiles into existing
-  `include/default_include` behavior rather than replacing it.
-- Default posture:
-  - no implicit repo-root `.ai/*` ingestion
-  - no broad globs that sweep local gitignored scratch files
+1. branch nodes can advance only branch-local revisions (`B0 -> B1 -> ...`)
+2. branch updates do not mutate run head directly
+3. stage manifests record `(run_base_revision, branch_revision)` for each stage
 
-### 2. Canonical Storage Locations
+### Fan-In Merge Back to Run Lineage
 
-1. Startup canonical input snapshot: `logs_root/input_snapshot/files/...`
-2. Run-level input manifest: `logs_root/inputs_manifest.json`
-3. Branch-level input manifest:
-   `<branch_logs_root>/inputs_manifest.json`
-4. Stage-level input manifest:
-   `logs_root/<node_id>/inputs_manifest.json`
-5. Stage workspace files visible to handlers/agents:
-   `./.ai/runs/<run_id>/...`
+1. merge happens once, at fan-in boundary
+2. default merge policy for `./.ai/runs/<run_id>/...` is `none`
+   (no implicit cross-branch promotion)
+3. optional explicit promotion list can be configured at fan-in
+4. conflicting writes in promoted paths produce deterministic
+   `failure_reason=input_snapshot_conflict` with conflict list
+5. successful merge creates new run head `Rn+1`
 
-### 3. Snapshot Evolution (Explicit Normative Addition)
+### Resume
 
-The startup snapshot remains canonical. This proposal adds revisioned mutation
-semantics for run-scoped workspace persistence:
+Resume restores from persisted run head and branch lineage metadata, never from
+mutable source workspace files.
 
-1. Create snapshot revision `0` at run startup.
-2. After each node completion, persist eligible run-scoped files
-   (`./.ai/runs/<run_id>/...`) into the canonical snapshot storage and bump
-   revision `N -> N+1`.
-3. Record `snapshot_revision` in run/branch/stage input manifests.
-4. Branch hydration and resume hydrate from latest committed snapshot revision.
-5. Snapshot-update failures are deterministic and recorded in checkpoint/progress
-   artifacts (no silent fallback to mutable workspace state).
+## Explicit Import Declaration Schema
 
-### 4. Read/Write Contract
+Current runtime config has `include` and `default_include`. This proposal adds a
+typed alias while preserving backward compatibility.
 
-- Nodes read required inputs from hydrated run-scoped workspace paths.
-- Nodes write scratch/outputs to `./.ai/runs/<run_id>/...`.
-- No requirement to git-track `.ai` files.
-- If output should become shared repository truth, use explicit publish/promotion
-  flow, not implicit runtime leakage.
+### New Schema
 
-## Why Shared Project Sources Still Matter
+`inputs.materialize.imports`:
 
-Run-scoped execution does not remove the need for shared source-of-truth files.
-Shared files are still needed for:
+```yaml
+inputs:
+  materialize:
+    imports:
+      - pattern: "docs/requirements.md"
+        required: true
+      - pattern: "docs/context/*.md"
+        required: false
+```
 
-1. reviewed canonical requirements/specs
-2. persistent policy/rubric files
-3. stable baselines reused across many runs
-4. durable governance/audit history in Git
+### Mapping Rules
 
-Correct split:
+1. `required=true` maps to `include`
+2. `required=false` maps to `default_include`
+3. `required` defaults to `true`
+4. normalized output preserves first-seen order and de-duplicates exact entries
 
-- authoritative sources: repo paths outside `.ai`
-- runtime working set: hydrated per-run workspace + persisted snapshot state
+### Validation Rules
+
+1. `pattern` is required and must be non-empty
+2. `imports` cannot be used together with explicit `include`/`default_include`
+   in the same config (deterministic validation error:
+   `failure_reason=input_imports_conflict`)
+3. unknown fields in import entries fail validation
+4. existing configs that use only `include/default_include` continue to work
+   unchanged
+
+## Migration for Existing Hardcoded `.ai` Runtime Paths
+
+The proposal now includes concrete migration for known root `.ai` assumptions.
+
+1. `internal/attractor/engine/stage_status_contract.go`
+   - keep primary `worktree/status.json`
+   - change fallback order:
+     1. `worktree/.ai/runs/<run_id>/status.json`
+     2. legacy `worktree/.ai/status.json` (compatibility window)
+2. `internal/attractor/runstate/snapshot.go`
+   - read postmortem/review first from
+     `worktree/.ai/runs/<run_id>/postmortem_latest.md` and
+     `worktree/.ai/runs/<run_id>/review_final.md`
+   - then legacy fallback to root `.ai/...` paths
+3. `cmd/kilroy/attractor_status_follow.go`
+   - update displayed source labels to new run-scoped paths
+   - keep legacy-path display fallback during migration
+
+## Compatibility Window
+
+1. one release supports dual-read (run-scoped first, legacy fallback second)
+2. emit deprecation warnings when legacy root `.ai` paths are consumed
+3. remove legacy fallback in the next major cleanup after migration telemetry
+   confirms low usage
 
 ## Implementation Plan
 
-1. **Boundary guardrail**
-   - disable implicit repo `.ai/*.md` ingestion by default
-   - keep explicit opt-in paths only
-2. **Spec-aligned import mapping**
-   - map explicit imports into existing `include/default_include`
-   - preserve C.1 include/default/include/closure/inference semantics
-3. **Revisioned snapshot manager**
-   - add snapshot revision metadata
-   - persist revision id into run/branch/stage manifests
-4. **Hydration parity**
-   - hydrate branch and resume from persisted snapshot revisions
-   - never read mutable source workspace as authoritative after startup
-5. **Diagnostics**
-   - record binary revision and snapshot revision transitions in run artifacts
-   - deterministic failure reasons for include/snapshot update failures
-6. **Migration**
-   - update templates/docs to use `./.ai/runs/<run_id>/...`
-   - provide compatibility notes for older graphs referencing `.ai/*.md`
+1. config + validation
+   - add `imports` schema to `InputMaterializationConfig`
+   - implement normalize/validate mapping and conflict rules
+2. lineage-aware snapshot manager
+   - add run/branch revision lineage metadata and deterministic merge
+   - emit deterministic conflict failures
+3. hydration integration
+   - hydrate run/branch/resume from lineage pointers
+4. runtime path migration
+   - patch the three cited files to run-scoped-first dual-read
+5. docs and examples
+   - update templates to write scratch/output under `./.ai/runs/<run_id>/...`
+   - keep examples explicit about `inputs.materialize.enabled` semantics
 
 ## Test Plan
 
-1. Canonical run/stage outputs remain under `logs_root` per spec.
-2. `KILROY_INPUTS_MANIFEST_PATH` is present and points to stage-local manifest.
-3. `include` unmatched => deterministic `failure_reason=input_include_missing`.
-4. `default_include` unmatched does not fail run.
-5. `follow_references=true` computes transitive closure.
-6. `infer_with_llm=true` inferer failure falls back to scanner-only closure with
-   warnings.
-7. Startup materialization does not ingest repo `.ai/*` unless explicitly
-   included.
-8. Run/branch/stage manifests all exist and carry consistent
-   `snapshot_revision`.
-9. Parallel branch worktrees hydrate latest persisted revision before stage exec.
-10. Resume after worktree recreation hydrates from persisted snapshot/manifest
-    state (not mutable source workspace).
-11. Same-file copy path cannot truncate content.
+1. branch isolation:
+   - branch A writes run-scoped file, branch B cannot observe it before fan-in
+2. deterministic fan-in merge:
+   - explicit promotion conflict yields `input_snapshot_conflict`
+3. lineage resume:
+   - recreated worktree restores from persisted run/branch lineage state
+4. conditional contracts:
+   - manifests/env present only when `inputs.materialize.enabled=true`
+   - manifests/env suppressed when disabled
+5. imports schema:
+   - mapping to `include/default_include` is correct
+   - `imports + include/default_include` emits `input_imports_conflict`
+6. path migration:
+   - status fallback and status-follow prefer run-scoped `.ai/runs/<run_id>`
+   - legacy root `.ai` fallback still works during compatibility window
+7. unchanged C.1 behavior:
+   - `input_include_missing`, default-include best effort, closure, and inferer
+     fallback behavior remain intact
 
 ## Reviewer Checklist
 
-1. Does proposal preserve `logs_root` as canonical run/stage artifact location?
-2. Does it keep all Appendix C.1 materialization semantics intact?
-3. Does it retain required run/branch/stage manifest coverage?
-4. Does it avoid introducing a new required runtime env var?
-5. Does it define explicit, deterministic snapshot evolution semantics?
-6. Does it prevent implicit repo `.ai/*` ingestion by default?
+1. Does the proposal avoid cross-branch leakage by defining branch lineage and
+   fan-in merge rules?
+2. Does it include concrete migration for the three cited hardcoded `.ai` path
+   locations?
+3. Does it scope manifest/env contracts to
+   `inputs.materialize.enabled=true`?
+4. Does it define a concrete `imports` schema and validator behavior?
+5. Does it preserve canonical `logs_root` artifacts and Appendix C.1 semantics?
 
-## Incident-Specific Cleanup (Completed)
+## Incident-Specific Cleanup
 
-- Removed stale local scratch file:
-  `/home/user/code/kilroy/.ai/spec.md`
+Removed stale local scratch file:
+`/home/user/code/kilroy/.ai/spec.md`
