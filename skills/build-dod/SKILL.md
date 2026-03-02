@@ -15,11 +15,21 @@ Tests aren't there to be passed. They're there to prove results. Verify the deli
 
 1. Read the full spec
 2. List deliverables — the artifacts that exist when done
-3. Write acceptance criteria — one observable assertion per row
-4. Inventory every user-facing message surface from the spec
-5. Write integration test scenarios that prove the deliverable works end-to-end
-6. Map each AC and each message to the scenario(s) that prove it
-7. Crosscheck — confirm every AC and every message is covered and every scenario is sound
+3. If a digraph/flow diagram is provided, extract intended user journeys, decision points, and outcomes from it
+4. Write acceptance criteria — one observable assertion per row
+5. Inventory every user-facing message surface from the spec
+6. Write integration test scenarios that prove the deliverable works end-to-end
+7. Map each AC and each message to the scenario(s) that prove it
+8. Crosscheck — confirm every AC and every message is covered and every scenario is sound
+
+## If a digraph is provided
+
+Use the graph in two passes:
+
+1. **Intent pass (primary):** Treat the graph as a map of product intent and user flow. Use it to identify the major journeys, decisions, and failure/recovery paths that matter to users.
+2. **Flow sanity pass (secondary):** Do lightweight topology checks only to catch intent-breaking issues (for example, a required outcome has no reachable path).
+
+Do **not** require one integration test per node or per edge unless the spec explicitly says graph topology itself is the contract.
 
 ## Acceptance Criteria
 
@@ -32,6 +42,12 @@ ACs describe *what* must be true. They are *proven* by integration test scenario
 ## Integration Test Scenarios
 
 Integration tests are the primary verification mechanism. Each scenario exercises the delivered artifact directly, proving multiple acceptance criteria simultaneously.
+
+When a digraph exists, write scenarios around **high-level intent coverage**, not exhaustive graph traversal. Prefer:
+- Primary happy paths
+- High-risk branches and decision outcomes
+- Critical error/recovery paths
+- Mode transitions that change user experience (for example first run vs returning user)
 
 **Test the delivered artifact in its delivery form.** At least one scenario must exercise the full delivery path:
 - Browser app → serve it in a browser, confirm it loads and runs
@@ -73,6 +89,7 @@ Before finalizing each scenario, confirm:
 - **Bounded** — the scenario has a finite, predictable number of steps (a test that must "play until winning" is unbounded; a test that exercises 5 specific levels via setup commands is bounded)
 - **Proportional** — effort to implement the test is proportional to the confidence it provides (testing 3 representative cases from a category provides nearly as much confidence as testing all 50)
 - **Independent** — the scenario produces the same result regardless of execution order or environment state
+- **Intent-complete** — collectively, scenarios prove the intended user journeys and outcomes described by the spec (and digraph, if present)
 
 ## The Crosscheck
 
@@ -91,6 +108,7 @@ After writing all ACs and integration scenarios, review:
 6. Confirm at least one scenario tests the deliverable in its delivery form
 7. Confirm every user-facing message from the inventory is triggered and validated by at least one scenario
 8. Confirm the scenarios collectively cover every AC group
+9. If a digraph exists, confirm no required intent path is missing or unreachable
 
 ## Output Format
 
