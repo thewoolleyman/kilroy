@@ -1,0 +1,97 @@
+version: 1
+
+graph: demo/substack-spec-v01.dot
+task: "Substack Creator Newsletter Engine v01 run config (spec+DoD+UI flow aligned)"
+
+repo:
+  path: /home/user/code/kilroy
+
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command:
+      - /home/user/code/kilroy/scripts/start-cxdb.sh
+    wait_timeout_ms: 60000
+    poll_interval_ms: 250
+    ui:
+      enabled: true
+      command:
+        - /home/user/code/kilroy/scripts/start-cxdb-ui.sh
+      url: http://127.0.0.1:9020
+
+llm:
+  cli_profile: real
+  providers:
+    google:
+      backend: api
+    anthropic:
+      backend: api
+    openai:
+      backend: api
+
+modeldb:
+  openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_update_policy: on_run_start
+  openrouter_model_info_url: https://openrouter.ai/api/v1/models
+  openrouter_model_info_fetch_timeout_ms: 10000
+
+git:
+  require_clean: false
+  run_branch_prefix: attractor/run
+  commit_per_node: true
+
+setup:
+  timeout_ms: 300000
+  commands:
+    - 'command -v node >/dev/null || { echo "missing required tool: node" >&2; exit 1; }'
+    - 'command -v npm >/dev/null || { echo "missing required tool: npm" >&2; exit 1; }'
+
+inputs:
+  materialize:
+    enabled: true
+    include: []
+    default_include:
+      - .ai/*.md
+    follow_references: true
+    infer_with_llm: false
+
+artifact_policy:
+  profiles: ["generic", "node"]
+  env:
+    managed_roots:
+      tool_cache_root: "managed"
+    overrides:
+      generic:
+        GEMINI_API_KEY: ""
+        ANTHROPIC_API_KEY: ""
+        OPENAI_API_KEY: ""
+      node: {}
+  checkpoint:
+    exclude_globs:
+      - "**/node_modules/**"
+      - "**/.pnpm-store/**"
+      - "**/.npm/**"
+      - "**/.cache/**"
+      - "**/playwright-report/**"
+      - "**/test-results/**"
+      - "**/.cargo-target*/**"
+      - "**/.cargo_target*/**"
+      - "**/.wasm-pack/**"
+      - "**/.tmpbuild/**"
+
+runtime_policy:
+  stage_timeout_ms: 0
+  stall_timeout_ms: 1800000
+  stall_check_interval_ms: 5000
+  max_llm_retries: 6
+
+preflight:
+  prompt_probes:
+    enabled: true
+    transports: [complete, stream]
+    timeout_ms: 60000
+    retries: 1
+    base_delay_ms: 500
+    max_delay_ms: 5000
