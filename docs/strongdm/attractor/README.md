@@ -56,6 +56,20 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Providers are resolved through runtime metadata (protocol family + backend + failover), not hard-coded provider switches.
   - Built-ins: `openai`, `anthropic`, `google`, `kimi`, `zai`, `cerebras`, `minimax`.
   - Built-in aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`, `cerebras-ai` -> `cerebras`, `minimax-ai` -> `minimax`.
+  - Built-in provider metadata does not define executable failover defaults.
+  - Failover occurs only when `llm.providers.<provider>.failover` is explicitly set in run config.
+  - Use `failover: []` to explicitly disable failover for a provider.
+  - Example explicit policy:
+    ```yaml
+    llm:
+      providers:
+        openai:
+          backend: api
+          failover: [google]
+        google:
+          backend: api
+          failover: []
+    ```
   - `kimi`, `zai`, `cerebras`, and `minimax` are API-only in this release (`kimi` uses `anthropic_messages`; `zai`, `cerebras`, and `minimax` use `openai_chat_completions`).
 - Real vs test-shim execution:
   - `llm.cli_profile` defaults to `real` and rejects `KILROY_CODEX_PATH`, `KILROY_CLAUDE_PATH`, `KILROY_GEMINI_PATH` overrides.
