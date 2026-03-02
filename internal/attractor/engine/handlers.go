@@ -279,11 +279,14 @@ func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string
 	if err != nil || len(results) == 0 {
 		return ""
 	}
+	currentWorktree := strings.TrimSpace(exec.WorktreeDir)
 	var b strings.Builder
 	b.WriteString("Manual parallel fan-in handoff:\n")
-	b.WriteString("- This node is a convergence box (not shape=tripleoctagon / parallel.fan_in).\n")
-	b.WriteString("- The engine does NOT auto-merge branch commits at this node. You must manually inspect and merge branch outputs.\n")
-	b.WriteString("- Branch outputs are available in the following isolated worktrees and logs roots:\n")
+	b.WriteString("- This node is a convergence box. The engine does NOT auto-merge branch commits — you must manually merge all branch outputs into the current worktree.\n")
+	if currentWorktree != "" {
+		b.WriteString(fmt.Sprintf("- Current worktree (write your merged result here): %s\n", currentWorktree))
+	}
+	b.WriteString("- Branch outputs (merge ALL of these unless your task prompt specifies a different strategy):\n")
 	for _, r := range results {
 		b.WriteString(fmt.Sprintf("  - branch_key=%s status=%s head_sha=%s worktree_dir=%s logs_root=%s\n",
 			strings.TrimSpace(r.BranchKey),
@@ -293,9 +296,13 @@ func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string
 			strings.TrimSpace(r.LogsRoot),
 		))
 	}
-	b.WriteString("- You may inspect artifacts by reading files directly from each branch worktree path above (for example branch `.ai/*` artifacts).\n")
-	b.WriteString("- You may also use git-based merge workflows when appropriate: compare branch outputs with `git diff`, inspect branch history/commits, and merge/cherry-pick by `head_sha` into the current worktree when that is the safest way to integrate changes.\n")
-	b.WriteString("- Write the merged result into the current run worktree and continue this node normally.\n")
+	b.WriteString("- DEFAULT MERGE STRATEGY (use this unless your task prompt says otherwise):\n")
+	b.WriteString("  1. For each branch above, run `git merge --no-ff <head_sha>` in the current worktree.\n")
+	b.WriteString("  2. If the merge succeeds cleanly, continue to the next branch.\n")
+	b.WriteString("  3. If there is a merge conflict, resolve it however you see fit, then `git add` the resolved\n")
+	b.WriteString("     files and run `git merge --continue` (or `git commit`) to complete the merge.\n")
+	b.WriteString("  4. Do NOT read files manually or copy them by hand unless git merge itself is unavailable.\n")
+	b.WriteString("- Node run artifacts (response.md, status.json, etc.) are under <logs_root>/<node_id>/.\n")
 	return strings.TrimSpace(b.String())
 }
 

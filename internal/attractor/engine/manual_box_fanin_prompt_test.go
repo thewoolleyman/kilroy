@@ -79,8 +79,17 @@ digraph G {
 	if !strings.Contains(mergePrompt, "Manual parallel fan-in handoff") {
 		t.Fatalf("merge prompt missing manual fan-in preamble")
 	}
-	if !strings.Contains(mergePrompt, "not shape=tripleoctagon / parallel.fan_in") {
-		t.Fatalf("merge prompt missing non-fan-in handler guidance")
+	if !strings.Contains(mergePrompt, "Current worktree") {
+		t.Fatalf("merge prompt missing current worktree path")
+	}
+	if !strings.Contains(mergePrompt, "DEFAULT MERGE STRATEGY") {
+		t.Fatalf("merge prompt missing default merge strategy guidance")
+	}
+	if !strings.Contains(mergePrompt, "git merge --no-ff") {
+		t.Fatalf("merge prompt missing git merge --no-ff as primary merge method")
+	}
+	if !strings.Contains(mergePrompt, "resolve it however you see fit") {
+		t.Fatalf("merge prompt missing conflict resolution guidance")
 	}
 	if !strings.Contains(mergePrompt, "branch_key=a") || !strings.Contains(mergePrompt, "branch_key=b") {
 		t.Fatalf("merge prompt missing branch keys")
