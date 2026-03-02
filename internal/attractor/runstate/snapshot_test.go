@@ -77,11 +77,11 @@ func TestApplyVerbose_PopulatesAllFields(t *testing.T) {
 `
 	_ = os.WriteFile(filepath.Join(root, "progress.ndjson"), []byte(ndjson), 0o644)
 
-	// worktree artifacts
-	aiDir := filepath.Join(root, "worktree", ".ai")
-	_ = os.MkdirAll(aiDir, 0o755)
-	_ = os.WriteFile(filepath.Join(aiDir, "postmortem_latest.md"), []byte("# Postmortem\nfailed"), 0o644)
-	_ = os.WriteFile(filepath.Join(aiDir, "review_final.md"), []byte("# Review\nlgtm"), 0o644)
+	// run-scoped worktree artifacts
+	runScopedAIDir := filepath.Join(root, "worktree", ".ai", "runs", "r1")
+	_ = os.MkdirAll(runScopedAIDir, 0o755)
+	_ = os.WriteFile(filepath.Join(runScopedAIDir, "postmortem_latest.md"), []byte("# Postmortem\nfailed"), 0o644)
+	_ = os.WriteFile(filepath.Join(runScopedAIDir, "review_final.md"), []byte("# Review\nlgtm"), 0o644)
 
 	s := &Snapshot{LogsRoot: root}
 	if err := ApplyVerbose(s); err != nil {
@@ -137,6 +137,32 @@ func TestApplyVerbose_MissingFilesAreSkipped(t *testing.T) {
 	}
 	if len(s.StageTrace) != 0 || len(s.CompletedNodes) != 0 || s.FinalCommitSHA != "" {
 		t.Fatal("expected all verbose fields empty for missing files")
+	}
+}
+
+func TestApplyVerbose_RunScopedArtifactsOnly(t *testing.T) {
+	root := t.TempDir()
+	runID := "run-scoped-only"
+
+	legacyAIDir := filepath.Join(root, "worktree", ".ai")
+	_ = os.MkdirAll(legacyAIDir, 0o755)
+	_ = os.WriteFile(filepath.Join(legacyAIDir, "postmortem_latest.md"), []byte("legacy postmortem"), 0o644)
+	_ = os.WriteFile(filepath.Join(legacyAIDir, "review_final.md"), []byte("legacy review"), 0o644)
+
+	runScopedAIDir := filepath.Join(legacyAIDir, "runs", runID)
+	_ = os.MkdirAll(runScopedAIDir, 0o755)
+	_ = os.WriteFile(filepath.Join(runScopedAIDir, "postmortem_latest.md"), []byte("run-scoped postmortem"), 0o644)
+	_ = os.WriteFile(filepath.Join(runScopedAIDir, "review_final.md"), []byte("run-scoped review"), 0o644)
+
+	s := &Snapshot{LogsRoot: root, RunID: runID}
+	if err := ApplyVerbose(s); err != nil {
+		t.Fatalf("ApplyVerbose: %v", err)
+	}
+	if got := s.PostmortemText; got != "run-scoped postmortem" {
+		t.Fatalf("postmortem=%q want %q", got, "run-scoped postmortem")
+	}
+	if got := s.ReviewText; got != "run-scoped review" {
+		t.Fatalf("review=%q want %q", got, "run-scoped review")
 	}
 }
 

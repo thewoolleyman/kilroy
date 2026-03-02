@@ -224,8 +224,8 @@ digraph G {
 		t.Fatalf("cli_invocation.status_path: got %q want %q", gotStatusPath, filepath.Join(res.WorktreeDir, "status.json"))
 	}
 	gotFallbackPath := strings.TrimSpace(anyToString(inv["status_fallback_path"]))
-	if gotFallbackPath != filepath.Join(res.WorktreeDir, ".ai", "status.json") {
-		t.Fatalf("cli_invocation.status_fallback_path: got %q want %q", gotFallbackPath, filepath.Join(res.WorktreeDir, ".ai", "status.json"))
+	if gotFallbackPath != filepath.Join(res.WorktreeDir, ".ai", "runs", res.RunID, "status.json") {
+		t.Fatalf("cli_invocation.status_fallback_path: got %q want %q", gotFallbackPath, filepath.Join(res.WorktreeDir, ".ai", "runs", res.RunID, "status.json"))
 	}
 	if gotEnvKey := strings.TrimSpace(anyToString(inv["status_env_key"])); gotEnvKey != stageStatusPathEnvKey {
 		t.Fatalf("cli_invocation.status_env_key: got %q want %q", gotEnvKey, stageStatusPathEnvKey)

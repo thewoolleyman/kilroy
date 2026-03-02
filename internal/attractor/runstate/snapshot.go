@@ -272,6 +272,7 @@ func applyCheckpointVerbose(s *Snapshot) error {
 type finalVerboseDoc struct {
 	FinalCommitSHA string `json:"final_git_commit_sha"`
 	CXDBContextID  string `json:"cxdb_context_id"`
+	RunID          string `json:"run_id"`
 }
 
 func applyFinalVerbose(s *Snapshot) error {
@@ -289,6 +290,9 @@ func applyFinalVerbose(s *Snapshot) error {
 	}
 	s.FinalCommitSHA = strings.TrimSpace(doc.FinalCommitSHA)
 	s.CXDBContextID = strings.TrimSpace(doc.CXDBContextID)
+	if s.RunID == "" {
+		s.RunID = strings.TrimSpace(doc.RunID)
+	}
 	return nil
 }
 
@@ -338,10 +342,15 @@ func applyStageTrace(s *Snapshot) error {
 }
 
 func applyWorktreeArtifacts(s *Snapshot) {
-	if b, err := os.ReadFile(filepath.Join(s.LogsRoot, "worktree", ".ai", "postmortem_latest.md")); err == nil {
+	runID := strings.TrimSpace(s.RunID)
+	if runID == "" {
+		return
+	}
+	runScopedDir := filepath.Join(s.LogsRoot, "worktree", ".ai", "runs", runID)
+	if b, err := os.ReadFile(filepath.Join(runScopedDir, "postmortem_latest.md")); err == nil {
 		s.PostmortemText = string(b)
 	}
-	if b, err := os.ReadFile(filepath.Join(s.LogsRoot, "worktree", ".ai", "review_final.md")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(runScopedDir, "review_final.md")); err == nil {
 		s.ReviewText = string(b)
 	}
 }

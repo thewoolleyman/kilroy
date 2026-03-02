@@ -7,6 +7,7 @@ import (
 )
 
 func TestStageStatusContract_AbsolutePaths_FromRelativeWorktreeInput(t *testing.T) {
+	t.Setenv(runIDEnvKey, "test-run")
 	rel := filepath.Join("tmp", "wt")
 	c := buildStageStatusContract(rel)
 
@@ -20,12 +21,13 @@ func TestStageStatusContract_AbsolutePaths_FromRelativeWorktreeInput(t *testing.
 
 func TestStageStatusContract_DefaultPaths(t *testing.T) {
 	wt := t.TempDir()
+	t.Setenv(runIDEnvKey, "test-run")
 	c := buildStageStatusContract(wt)
 
 	if got, want := c.PrimaryPath, filepath.Join(wt, "status.json"); got != want {
 		t.Fatalf("primary path: got %q want %q", got, want)
 	}
-	if got, want := c.FallbackPath, filepath.Join(wt, ".ai", "status.json"); got != want {
+	if got, want := c.FallbackPath, filepath.Join(wt, ".ai", "runs", "test-run", "status.json"); got != want {
 		t.Fatalf("fallback path: got %q want %q", got, want)
 	}
 	if got := c.EnvVars[stageStatusPathEnvKey]; strings.TrimSpace(got) == "" {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/runstate"
 )
 
 func TestFollowProgress_EmitsFormattedEvents(t *testing.T) {
@@ -292,5 +294,30 @@ func TestRunAttractorStatus_LatestAndLogsRootMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "mutually exclusive") {
 		t.Fatalf("expected mutual exclusion error: %s", stderr.String())
+	}
+}
+
+func TestPrintVerboseSnapshot_RunScopedLabelsOnly(t *testing.T) {
+	s := &runstate.Snapshot{
+		RunID:          "run-123",
+		PostmortemText: "postmortem body",
+		ReviewText:     "review body",
+	}
+
+	var out bytes.Buffer
+	printVerboseSnapshot(&out, s)
+	got := out.String()
+
+	if !strings.Contains(got, "worktree/.ai/runs/run-123/postmortem_latest.md") {
+		t.Fatalf("missing run-scoped postmortem label: %s", got)
+	}
+	if !strings.Contains(got, "worktree/.ai/runs/run-123/review_final.md") {
+		t.Fatalf("missing run-scoped review label: %s", got)
+	}
+	if strings.Contains(got, "worktree/.ai/postmortem_latest.md") {
+		t.Fatalf("legacy postmortem label must not be present: %s", got)
+	}
+	if strings.Contains(got, "worktree/.ai/review_final.md") {
+		t.Fatalf("legacy review label must not be present: %s", got)
 	}
 }

@@ -15,11 +15,10 @@ import (
 )
 
 const (
-	failureDossierFileName             = "failure_dossier.json"
-	failureDossierWorktreeRelativePath = ".ai/failure_dossier.json"
-	toolInvocationFileName             = "tool_invocation.json"
-	toolTimingFileName                 = "tool_timing.json"
-	toolStderrFileName                 = "stderr.log"
+	failureDossierFileName = "failure_dossier.json"
+	toolInvocationFileName = "tool_invocation.json"
+	toolTimingFileName     = "tool_timing.json"
+	toolStderrFileName     = "stderr.log"
 
 	failureDossierContextPathKey         = "context.failure_dossier.path"
 	failureDossierContextLogsPathKey     = "context.failure_dossier.logs_path"
@@ -91,13 +90,14 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 
 	contextPath := logsPath
 	if strings.TrimSpace(e.WorktreeDir) != "" {
-		wtPath := filepath.Join(e.WorktreeDir, failureDossierWorktreeRelativePath)
+		worktreeRelPath := failureDossierRunScopedRelativePath(e.Options.RunID)
+		wtPath := filepath.Join(e.WorktreeDir, filepath.FromSlash(worktreeRelPath))
 		if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 			e.Warn(fmt.Sprintf("failure dossier mkdir (%s): %v", filepath.Dir(wtPath), err))
 		} else if err := writeJSON(wtPath, dossier); err != nil {
 			e.Warn(fmt.Sprintf("failure dossier write (%s): %v", wtPath, err))
 		} else {
-			contextPath = failureDossierWorktreeRelativePath
+			contextPath = worktreeRelPath
 		}
 	}
 
@@ -112,6 +112,14 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 		"failure_class":  dossier.FailureClass,
 		"path":           contextPath,
 	})
+}
+
+func failureDossierRunScopedRelativePath(runID string) string {
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		id = "unknown_run"
+	}
+	return filepath.ToSlash(filepath.Join(".ai", "runs", id, failureDossierFileName))
 }
 
 func (e *Engine) clearFailureDossierContext() {

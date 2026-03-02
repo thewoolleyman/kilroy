@@ -84,7 +84,8 @@ digraph G {
 		t.Fatalf("missing path should not exist now: %+v", pathFact)
 	}
 
-	worktreeDossierPath := filepath.Join(res.WorktreeDir, failureDossierWorktreeRelativePath)
+	worktreeRelPath := failureDossierRunScopedRelativePath(res.RunID)
+	worktreeDossierPath := filepath.Join(res.WorktreeDir, filepath.FromSlash(worktreeRelPath))
 	if _, err := os.Stat(worktreeDossierPath); err != nil {
 		t.Fatalf("worktree failure dossier missing: %v", err)
 	}
@@ -98,8 +99,8 @@ digraph G {
 	if !strings.Contains(prompt, "Failure dossier contract") {
 		t.Fatalf("postmortem prompt missing failure dossier preamble:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, failureDossierWorktreeRelativePath) {
-		t.Fatalf("postmortem prompt missing worktree failure dossier path %q:\n%s", failureDossierWorktreeRelativePath, prompt)
+	if !strings.Contains(prompt, worktreeRelPath) {
+		t.Fatalf("postmortem prompt missing worktree failure dossier path %q:\n%s", worktreeRelPath, prompt)
 	}
 	if !strings.Contains(prompt, logsDossierPath) {
 		t.Fatalf("postmortem prompt missing logs failure dossier path %q:\n%s", logsDossierPath, prompt)

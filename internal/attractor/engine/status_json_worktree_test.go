@@ -93,7 +93,7 @@ digraph G {
 	}
 }
 
-func TestRunWithConfig_CLIBackend_DotAIStatusJSON_IsTreatedAsStageStatus(t *testing.T) {
+func TestRunWithConfig_CLIBackend_RunScopedStatusJSON_IsTreatedAsStageStatus(t *testing.T) {
 	cleanupStrayEngineArtifacts(t)
 	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
 
@@ -107,11 +107,11 @@ func TestRunWithConfig_CLIBackend_DotAIStatusJSON_IsTreatedAsStageStatus(t *test
 	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
 set -euo pipefail
 
-# Simulate an agent that writes status.json inside .ai/ (common when prompts
-# reference .ai/ paths like ".ai/verify.md").
-mkdir -p .ai
-cat > .ai/status.json <<'JSON'
-{"status":"success","notes":"written to .ai/status.json"}
+# Simulate an agent that writes status.json to the run-scoped .ai path.
+[[ -n "${KILROY_RUN_ID:-}" ]] || { echo "missing KILROY_RUN_ID" >&2; exit 51; }
+mkdir -p ".ai/runs/${KILROY_RUN_ID}"
+cat > ".ai/runs/${KILROY_RUN_ID}/status.json" <<'JSON'
+{"status":"success","notes":"written to run-scoped .ai/runs/<run_id>/status.json"}
 JSON
 
 echo '{"type":"start"}'
@@ -133,7 +133,7 @@ echo '{"type":"done","text":"ok"}'
 
 	dot := []byte(`
 digraph G {
-  graph [goal="test .ai/status.json fallback"]
+  graph [goal="test run-scoped .ai/runs/<run_id>/status.json fallback"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
@@ -145,12 +145,13 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "test-dotai-status-json", LogsRoot: logsRoot, AllowTestShim: true})
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "test-run-scoped-status-json", LogsRoot: logsRoot, AllowTestShim: true})
 	if err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
 	}
 
-	// The stage status should reflect the .ai/status.json written by the CLI backend.
+	// The stage status should reflect the run-scoped .ai/runs/<run_id>/status.json
+	// written by the CLI backend.
 	b, err := os.ReadFile(filepath.Join(res.LogsRoot, "a", "status.json"))
 	if err != nil {
 		t.Fatalf("read a/status.json: %v", err)

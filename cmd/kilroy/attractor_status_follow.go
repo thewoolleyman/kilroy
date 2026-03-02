@@ -483,9 +483,17 @@ func printVerboseSnapshot(w io.Writer, s *runstate.Snapshot) {
 	}
 
 	if s.PostmortemText != "" {
-		fmt.Fprintf(w, "\n--- postmortem (worktree/.ai/postmortem_latest.md) ---\n%s\n", s.PostmortemText)
+		fmt.Fprintf(w, "\n--- postmortem (%s) ---\n%s\n", runScopedVerboseArtifactLabel(s.RunID, "postmortem_latest.md"), s.PostmortemText)
 	}
 	if s.ReviewText != "" {
-		fmt.Fprintf(w, "\n--- review (worktree/.ai/review_final.md) ---\n%s\n", s.ReviewText)
+		fmt.Fprintf(w, "\n--- review (%s) ---\n%s\n", runScopedVerboseArtifactLabel(s.RunID, "review_final.md"), s.ReviewText)
 	}
+}
+
+func runScopedVerboseArtifactLabel(runID string, fileName string) string {
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		id = "<run_id>"
+	}
+	return filepath.ToSlash(filepath.Join("worktree", ".ai", "runs", id, strings.TrimSpace(fileName)))
 }

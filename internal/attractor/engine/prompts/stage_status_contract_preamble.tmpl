@@ -1,6 +1,6 @@
 Execution status contract:
 ${{.StageStatusPathEnvKey}} = {{.PrimaryPath}}
 ${{.StageStatusFallbackPathEnvKey}} = {{.FallbackPath}}
-- Write your status JSON to ${{.StageStatusPathEnvKey}}. If that write fails, use ${{.StageStatusFallbackPathEnvKey}}.
+- Write your status JSON to ${{.StageStatusPathEnvKey}}. If that write fails, use run-scoped fallback ${{.StageStatusFallbackPathEnvKey}}.
 - Do not write status.json to nested module directories.
 - To end this stage: write the status file, then return your response. Do NOT call close_agent or any session-management tool.
