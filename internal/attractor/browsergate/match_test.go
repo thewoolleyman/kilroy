@@ -75,6 +75,11 @@ func TestIsBrowserVerificationNode_WrapperCommands(t *testing.T) {
 			cmd:  "bash -lc 'npm ci && npx playwright install --with-deps'",
 			want: false,
 		},
+		{
+			name: "wrapper mixed setup and verify command",
+			cmd:  "bash -lc 'npm ci && npx playwright test'",
+			want: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -84,6 +89,18 @@ func TestIsBrowserVerificationNode_WrapperCommands(t *testing.T) {
 				t.Fatalf("IsBrowserVerificationNode(%q) = %v, want %v", tc.cmd, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsBrowserVerificationNode_DoesNotMatchUISubstringInUnrelatedWords(t *testing.T) {
+	got := IsBrowserVerificationNode(
+		"sh scripts/validate-build.sh",
+		"build_suite_test",
+		"Build Suite Test",
+		nil,
+	)
+	if got {
+		t.Fatalf("expected false for non-browser node id/label with ui substring in words")
 	}
 }
 
@@ -97,6 +114,7 @@ func TestIsBrowserSetupCommand(t *testing.T) {
 		{name: "playwright install", cmd: "npx playwright install --with-deps", want: true},
 		{name: "apt install", cmd: "sudo apt-get install -y xvfb", want: true},
 		{name: "pip install", cmd: "pip install selenium", want: true},
+		{name: "mixed setup and verify command", cmd: "npm ci && npx playwright test", want: false},
 		{name: "browser verify command", cmd: "npx playwright test", want: false},
 		{name: "generic test command", cmd: "go test ./...", want: false},
 	}

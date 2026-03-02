@@ -553,6 +553,27 @@ var (
 	collectBrowserArtifactsFunc  = collectBrowserArtifacts
 )
 
+var toolActionableLineHints = []string{
+	"error",
+	"fail",
+	"failed",
+	"failure",
+	"exception",
+	"panic",
+	"fatal",
+	"timeout",
+	"timed out",
+	"net::",
+	"err_",
+	"missing",
+	"not found",
+	"cannot",
+	"can't",
+	"refused",
+	"disconnected",
+	"assert",
+}
+
 func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
 	cmdStr := strings.TrimSpace(node.Attr("tool_command", ""))
@@ -630,12 +651,9 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
-	start := time.Now()
-	if !startedAt.IsZero() {
-		start = startedAt
-	}
+	commandStart := time.Now()
 	runErr := cmd.Run()
-	dur := time.Since(start)
+	dur := time.Since(commandStart)
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
@@ -764,13 +782,33 @@ func firstActionableToolOutputLine(data []byte) string {
 		return ""
 	}
 	lines := strings.Split(string(data), "\n")
+	firstNonEmpty := ""
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
+		if trimmed == "" {
+			continue
+		}
+		if firstNonEmpty == "" {
+			firstNonEmpty = trimToRunes(trimmed, 4000)
+		}
+		if looksActionableToolOutputLine(trimmed) {
 			return trimToRunes(trimmed, 4000)
 		}
 	}
-	return ""
+	return firstNonEmpty
+}
+
+func looksActionableToolOutputLine(line string) bool {
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line == "" {
+		return false
+	}
+	for _, hint := range toolActionableLineHints {
+		if strings.Contains(line, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func truncate(s string, n int) string {

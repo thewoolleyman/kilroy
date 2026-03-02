@@ -17,6 +17,19 @@ var verificationTokens = []string{
 	"make ui-test",
 }
 
+var verificationRunnerTokens = []string{
+	"playwright test",
+	"cypress run",
+	"npm run e2e",
+	"npm run test:e2e",
+	"pnpm test:e2e",
+	"pnpm run e2e",
+	"yarn test:e2e",
+	"yarn run e2e",
+	"make e2e",
+	"make ui-test",
+}
+
 var setupTokens = []string{
 	"npm ci",
 	"npm install",
@@ -45,7 +58,7 @@ func IsBrowserVerificationNode(command, nodeID, nodeLabel string, attrs map[stri
 		return true
 	}
 	intent := normalizeNodeIntent(nodeID + " " + nodeLabel)
-	return containsAnyToken(intent, browserKeywords) && containsAnyToken(intent, verifyKeywords)
+	return hasAnyIntentKeyword(intent, browserKeywords) && hasAnyIntentKeyword(intent, verifyKeywords)
 }
 
 func IsBrowserSetupCommand(command string) bool {
@@ -53,14 +66,12 @@ func IsBrowserSetupCommand(command string) bool {
 	if cmd == "" {
 		return false
 	}
-	if containsAnyToken(cmd, setupTokens) {
-		return true
-	}
-	// Mixed setup+verify commands should still be treated as verification.
-	if containsAnyToken(cmd, verificationTokens) {
+	hasSetup := containsAnyToken(cmd, setupTokens)
+	if !hasSetup {
 		return false
 	}
-	return false
+	// Mixed setup+verify commands should be treated as verification nodes.
+	return !containsAnyToken(cmd, verificationRunnerTokens)
 }
 
 func boolAttr(attrs map[string]string, key string) bool {
@@ -84,6 +95,33 @@ func normalizeNodeIntent(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	replacer := strings.NewReplacer("-", " ", "_", " ", "/", " ", ".", " ", ":", " ")
 	return strings.Join(strings.Fields(replacer.Replace(s)), " ")
+}
+
+func hasAnyIntentKeyword(intent string, keywords []string) bool {
+	if intent == "" || len(keywords) == 0 {
+		return false
+	}
+	words := strings.Fields(intent)
+	set := make(map[string]struct{}, len(words))
+	for _, w := range words {
+		set[w] = struct{}{}
+	}
+	for _, keyword := range keywords {
+		keyword = strings.TrimSpace(strings.ToLower(keyword))
+		if keyword == "" {
+			continue
+		}
+		if strings.Contains(keyword, " ") {
+			if strings.Contains(intent, keyword) {
+				return true
+			}
+			continue
+		}
+		if _, ok := set[keyword]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAnyToken(haystack string, tokens []string) bool {

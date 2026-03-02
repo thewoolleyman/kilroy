@@ -82,6 +82,25 @@ func TestToolHandler_BrowserFailureReasonUsesStderrExcerpt_WhenCommandFails(t *t
 	}
 }
 
+func TestToolHandler_BrowserFailureReasonUsesActionableLine_WhenBannerPrecedesError(t *testing.T) {
+	out, _, _, _ := runToolHandler(
+		t,
+		"verify_browser",
+		"Verify Browser",
+		"echo 'Running 1 test using 1 worker' >&2; echo 'page.goto failed: net::ERR_INTERNET_DISCONNECTED' >&2; exit 1",
+		nil,
+	)
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status: got %q want %q", out.Status, runtime.StatusFail)
+	}
+	if strings.Contains(strings.ToLower(out.FailureReason), "running 1 test") {
+		t.Fatalf("failure_reason should skip banner line, got: %q", out.FailureReason)
+	}
+	if !strings.Contains(strings.ToLower(out.FailureReason), "net::err_internet_disconnected") {
+		t.Fatalf("failure_reason should include actionable transient line, got: %q", out.FailureReason)
+	}
+}
+
 func TestToolHandler_BrowserFailureReasonFallsBackToStdout_WhenStderrEmpty(t *testing.T) {
 	out, _, _, _ := runToolHandler(t, "verify_browser", "Verify Browser", "echo 'page.goto failed: net::ERR_INTERNET_DISCONNECTED'; exit 1", nil)
 	if out.Status != runtime.StatusFail {
