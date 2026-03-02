@@ -159,6 +159,8 @@ Required properties: (1) idempotent — skip existing files; (2) modulo item ass
 - For compiled or packaged deliverables (executables, libraries, modules, services, containers, bundles): the verification node MUST validate the expected runtime behavior or interface contract — not just file existence or a successful build exit code.
 - Add a domain-specific runtime validation node when needed (for example `verify_runtime`, `verify_api_contract`, `verify_cli_behavior`, `verify_ui_smoke`). Use checks that prove the deliverable actually works for the intended use case.
 - A stub artifact can compile and still be functionally empty; require contract-level verification (exports, endpoints, CLI behavior, or observable outputs) to catch this.
+- For browser/UI verification, prefer explicit verify node names (for example `verify_browser`, `verify_e2e`) and runner commands (`playwright test`, `cypress run`, `npm run e2e`) so intent is unambiguous.
+- If browser verification intent is wrapped/ambiguous (for example custom shell wrapper), set `collect_browser_artifacts=true` on that verify node.
 - The verify_fidelity prompt MUST enumerate acceptance criteria by numbered ID (AC1, AC2, ...), map each to the specific output file(s) that implement it:
   ```
   AC1: src/auth.py   — verify token issuance and expiry behaviour

@@ -228,6 +228,10 @@ Stage-level (`{logs_root}/{node_id}`) commonly includes:
 
 Exact files depend on handler/backend type.
 
+Browser verification notes:
+- Browser verify nodes emit `tool_browser_artifacts` events in `{logs_root}/progress.ndjson`.
+- Collected browser files are stored in `{logs_root}/{node_id}/browser_artifacts/`; on retries, prior copies are preserved in `{logs_root}/{node_id}/attempt_N/browser_artifacts/`.
+
 ## Status Contract for Codergen Nodes
 
 For `shape=box` nodes:
