@@ -115,7 +115,7 @@ func TestClassifyProviderCLIErrorWithContract_ExecutableMissing(t *testing.T) {
 
 func TestClassifyProviderCLIErrorWithContract_CapabilityMissing(t *testing.T) {
 	spec := &providerspec.CLISpec{
-		CapabilityAll: []string{"--json", "--sandbox"},
+		CapabilityAll: []string{"--json"},
 	}
 	got := classifyProviderCLIErrorWithContract(
 		"openai",

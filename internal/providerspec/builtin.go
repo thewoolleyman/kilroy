@@ -13,10 +13,10 @@ var builtinSpecs = map[string]Spec{
 		},
 		CLI: &CLISpec{
 			DefaultExecutable:  "codex",
-			InvocationTemplate: []string{"exec", "--json", "--sandbox", "workspace-write", "-m", "{{model}}", "-C", "{{worktree}}"},
+			InvocationTemplate: []string{"exec", "--json", "-m", "{{model}}", "-C", "{{worktree}}"},
 			PromptMode:         "stdin",
 			HelpProbeArgs:      []string{"exec", "--help"},
-			CapabilityAll:      []string{"--json", "--sandbox"},
+			CapabilityAll:      []string{"--json"},
 		},
 	},
 	"anthropic": {
